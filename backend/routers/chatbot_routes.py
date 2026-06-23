@@ -9,7 +9,10 @@ from services.ollama_service import ollama_service
 from services.redis_service import redis_service
 import hashlib
 import json
+import logging
 import asyncio
+
+logger = logging.getLogger("chatbot.routers.chatbot_routes")
 
 router = APIRouter(prefix="/chat", tags=["chatbot"])
 
@@ -31,6 +34,9 @@ async def log_failed_question(domain_id: str, question: str, ai_response: str, r
 
 async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: int = 5):
     from sqlalchemy.sql import func
+    # Combine question, answer, and aliases for FTS
+    search_text = FAQQuestion.question + ' ' + FAQQuestion.answer + ' ' + func.coalesce(func.array_to_string(FAQQuestion.aliases, ' '), '')
+    
     stmt = select(FAQQuestion).join(
         FAQCategory, FAQQuestion.faq_id == FAQCategory.id
     ).join(
@@ -39,9 +45,9 @@ async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: i
         DomainCategory.domain_id == domain_id,
         FAQQuestion.status == 'active'
     ).where(
-        func.to_tsvector('english', FAQQuestion.question + ' ' + FAQQuestion.answer).op('@@')(func.websearch_to_tsquery('english', query))
+        func.to_tsvector('english', search_text).op('@@')(func.websearch_to_tsquery('english', query))
     ).order_by(
-        func.ts_rank(func.to_tsvector('english', FAQQuestion.question + ' ' + FAQQuestion.answer), func.websearch_to_tsquery('english', query)).desc()
+        func.ts_rank(func.to_tsvector('english', search_text), func.websearch_to_tsquery('english', query)).desc()
     ).limit(limit)
     
     res = await db.execute(stmt)
@@ -59,13 +65,17 @@ async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: i
         })
     return results
 
+from utils.nlp_utils import normalize_query
+
 @router.post("/ask")
 async def ask_chatbot(request: ChatRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
-    normalized_q = request.message.strip()
+    normalized_q = normalize_query(request.message)
     
     chat_history = []
     if request.session_id:
-        chat_history = await redis_service.get_chat_history(request.session_id)
+        raw_history = await redis_service.get_chat_history(request.session_id)
+        if raw_history:
+            chat_history = [msg for msg in raw_history if "don't have enough information" not in msg.get("ai", "").lower()]
         
     resolved_query = normalized_q
     if chat_history:
@@ -161,6 +171,13 @@ async def ask_chatbot(request: ChatRequest, background_tasks: BackgroundTasks, d
     fallback = domain.settings.get("fallback_message", "I don't have enough information to answer that based on the current knowledge base.") if domain.settings else "I don't have enough information to answer that based on the current knowledge base."
 
     if not top_chunks:
+        logger.info({
+            "question": request.message,
+            "score": 0.0,
+            "matched_question": None,
+            "matched_category": category_ids,
+            "path": "NO_MATCH"
+        })
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, fallback, "NO_MATCH")
         return {"answer": fallback, "cached": False, "sources": 0}
 
@@ -168,15 +185,29 @@ async def ask_chatbot(request: ChatRequest, background_tasks: BackgroundTasks, d
     max_score = top_chunks[0].get("score", 0)
 
     # 5. Score Check
-    if max_score >= 0.97:
+    if max_score >= 0.95:
         # Ultimate Fast Path
         fast_answer = top_chunks[0].get("payload", {}).get("answer")
         if fast_answer:
+            logger.info({
+                "question": request.message,
+                "score": max_score,
+                "matched_question": top_chunks[0].get("payload", {}).get("question"),
+                "matched_category": category_ids,
+                "path": "FAST_PATH"
+            })
             background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": fast_answer}, 3600)
             return {"answer": fast_answer, "cached": False, "sources": 1, "fast_path": True}
 
-    if max_score < 0.70:
+    if max_score < 0.60:
         # Early Exit
+        logger.info({
+            "question": request.message,
+            "score": max_score,
+            "matched_question": top_chunks[0].get("payload", {}).get("question"),
+            "matched_category": category_ids,
+            "path": "FALLBACK"
+        })
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, fallback, "LOW_CONFIDENCE")
         return {"answer": fallback, "cached": False, "sources": len(top_chunks)}
 
@@ -204,26 +235,41 @@ async def ask_chatbot(request: ChatRequest, background_tasks: BackgroundTasks, d
 
     system_prompt = f"""You are a helpful and precise AI assistant for the website {domain.domain_name}.
 You must answer the user's question relying ONLY on the provided context.
-If the context does not contain the answer, or if you are unsure, you must reply EXACTLY with: "{fallback}"
-Do not guess, do not provide external knowledge, and do not hallucinate.{history_text}
+You may correct minor spelling mistakes in the user's question to match the context.
+If the context does not contain the information needed to answer the user's question, you must reply EXACTLY with the following string and nothing else: "{fallback}"
+Do not guess, do not provide external knowledge, do not hallucinate, and do not provide any explanations if the context is insufficient.{history_text}
 
 Context:
 {context_text}"""
 
     try:
+        print("SYSTEM PROMPT:")
+        print(system_prompt)
+        print("USER QUERY:", request.message)
         answer = await ollama_service.generate_response(
             system_prompt=system_prompt,
             user_query=request.message
         )
+        print("LLM ANSWER:", answer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate LLM response: {str(e)}")
 
     if fallback.lower() in answer.lower() or "i don't have enough information" in answer.lower():
+        path_type = "LLM_FAILURE"
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, "LLM_FAILURE")
     else:
+        path_type = "LLM_PATH"
         background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": answer}, 3600)
+
+    logger.info({
+        "question": request.message,
+        "score": max_score,
+        "matched_question": top_chunks[0].get("payload", {}).get("question"),
+        "matched_category": category_ids,
+        "path": path_type
+    })
 
     if request.session_id:
         background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, answer)
 
-    return {"answer": answer, "cached": False, "sources": len(top_chunks)}
+    return {"answer": answer, "cached": False, "sources": len(top_chunks), "debug_prompt": system_prompt, "debug_llm_answer": answer}

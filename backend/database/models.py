@@ -1,4 +1,5 @@
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, JSON, Index, text
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
@@ -82,6 +83,7 @@ class FAQQuestion(Base):
     question = Column(String, nullable=False)
     answer = Column(String, nullable=False)
     status = Column(String, default="active")
+    aliases = Column(ARRAY(String), default=list, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     

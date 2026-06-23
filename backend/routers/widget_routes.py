@@ -14,6 +14,7 @@ from database.models import Domain, ChatSession, ChatMessage, Lead, FailedQuesti
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
 from services.redis_service import redis_service
+from utils.nlp_utils import normalize_query
 import hashlib
 import asyncio
 
@@ -374,9 +375,44 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                 # 3. Send Instant Typing Event
                 await websocket.send_json({"type": "typing"})
 
-                # Get Normalized Question Hash
-                normalized_q = user_msg.lower().strip()
-                q_hash = hashlib.md5(normalized_q.encode()).hexdigest()
+                # Get Normalized Question
+                normalized_q = normalize_query(user_msg)
+                
+                resolved_query = normalized_q
+                
+                # Retrieve last 6 messages for session memory BEFORE embedding
+                stmt_mem = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.desc()).limit(6)
+                res_mem = await db.execute(stmt_mem)
+                recent_messages = res_mem.scalars().all()
+                recent_messages.reverse()
+                
+                chat_history_for_rewrite = [msg for msg in recent_messages if msg.id != user_cm.id]
+                
+                if chat_history_for_rewrite:
+                    followup_words = ["how", "what", "when", "where", "why", "who", "it", "that", "this", "they", "those", "he", "she"]
+                    is_short = len(normalized_q.split()) < 6
+                    has_pronoun = any(word in normalized_q.lower().split() for word in followup_words)
+                    
+                    if is_short or has_pronoun:
+                        try:
+                            formatted_history = []
+                            current_pair = {}
+                            for msg in chat_history_for_rewrite:
+                                if msg.sender == "user":
+                                    current_pair["user"] = msg.message
+                                elif msg.sender == "bot" and "user" in current_pair:
+                                    current_pair["ai"] = msg.message
+                                    if "don't have enough information" not in msg.message.lower() and "fallback" not in msg.message.lower():
+                                        formatted_history.append(current_pair)
+                                    current_pair = {}
+                            
+                            if formatted_history:
+                                resolved_query = await ollama_service.rewrite_query(formatted_history, normalized_q)
+                        except Exception as e:
+                            logger.error(f"Query rewrite failed: {e}")
+                            resolved_query = normalized_q
+
+                q_hash = hashlib.md5(resolved_query.encode()).hexdigest()
                 cache_key = f"chat:{domain.id}:{q_hash}"
 
                 # 4. Answer Cache Check (Exact match)
@@ -405,7 +441,7 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                 need_cache_embedding = False
                 if not query_vector:
                     try:
-                        query_vector = await ollama_service.generate_embedding(user_msg)
+                        query_vector = await ollama_service.generate_embedding(resolved_query)
                         need_cache_embedding = True
                     except Exception as embed_err:
                         logger.error(f"Embedding generation error: {embed_err}")
@@ -425,21 +461,51 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                         logger.error(f"Failed to fetch categories: {cat_err}")
                         category_ids = []
 
-                # 7. Search Qdrant
-                try:
-                    top_chunks = await qdrant_service.search_chunks(
-                        tenant_id=domain.organization_id,
-                        query_vector=query_vector,
-                        category_ids=category_ids,
-                        limit=3
-                    )
-                except Exception as search_err:
-                    logger.error(f"Qdrant search error: {search_err}")
-                    top_chunks = []
+                # 7. Search Qdrant and Postgres FTS
+                from routers.chatbot_routes import search_faqs_fts
+                
+                async def run_qdrant():
+                    try:
+                        return await qdrant_service.search_chunks(
+                            tenant_id=domain.organization_id,
+                            query_vector=query_vector,
+                            category_ids=category_ids,
+                            limit=3
+                        )
+                    except Exception as search_err:
+                        logger.error(f"Qdrant search error: {search_err}")
+                        return []
+                        
+                qdrant_chunks, fts_chunks = await asyncio.gather(
+                    run_qdrant(),
+                    search_faqs_fts(db, domain.id, resolved_query, limit=3)
+                )
+
+                # Merge and deduplicate
+                seen_texts = set()
+                top_chunks = []
+                
+                for chunk in fts_chunks + qdrant_chunks:
+                    payload = chunk.get("payload", {})
+                    text_content = payload.get("question") or payload.get("text", "")
+                    short_key = text_content[:100].lower()
+                    if short_key not in seen_texts:
+                        seen_texts.add(short_key)
+                        top_chunks.append(chunk)
+                        
+                top_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
+                top_chunks = top_chunks[:5]
 
                 fallback = domain.settings.get("fallback_message", "I don't have enough information to answer that based on the current knowledge base.") if domain.settings else "I don't have enough information to answer that based on the current knowledge base."
 
                 if not top_chunks:
+                    logger.info({
+                        "question": user_msg,
+                        "score": 0.0,
+                        "matched_question": None,
+                        "matched_category": category_ids,
+                        "path": "NO_MATCH"
+                    })
                     # Early Exit: No match
                     await websocket.send_json({
                         "type": "message",
@@ -462,10 +528,17 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                 # Score Check
                 max_score = top_chunks[0].get("score", 0)
 
-                # 8. Score Check: FAQ Fast Path (>= 0.97)
-                if max_score >= 0.97:
+                # 8. Score Check: FAQ Fast Path (>= 0.95)
+                if max_score >= 0.95:
                     fast_answer = top_chunks[0].get("payload", {}).get("answer")
                     if fast_answer:
+                        logger.info({
+                            "question": user_msg,
+                            "score": max_score,
+                            "matched_question": top_chunks[0].get("payload", {}).get("question"),
+                            "matched_category": category_ids,
+                            "path": "FAST_PATH"
+                        })
                         await websocket.send_json({
                             "type": "message",
                             "text": fast_answer,
@@ -484,8 +557,15 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                         ))
                         continue
 
-                # 9. Score Check: Early Exit Fallback (< 0.70)
-                if max_score < 0.70:
+                # 9. Score Check: Early Exit Fallback (< 0.60)
+                if max_score < 0.60:
+                    logger.info({
+                        "question": user_msg,
+                        "score": max_score,
+                        "matched_question": top_chunks[0].get("payload", {}).get("question"),
+                        "matched_category": category_ids,
+                        "path": "FALLBACK"
+                    })
                     await websocket.send_json({
                         "type": "message",
                         "text": fallback,
@@ -504,7 +584,7 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                     ))
                     continue
 
-                # 10. Normal RAG Path (0.70 - 0.97): Build Context with Memory and Stream Response
+                # 10. Normal RAG Path (0.60 - 0.95): Build Context with Memory and Stream Response
                 # Retrieve last 5 messages for session memory
                 stmt_mem = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.desc()).limit(5)
                 res_mem = await db.execute(stmt_mem)
@@ -536,8 +616,9 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                 prompt_history_context = "\n\n".join(prompt_parts)
                 system_prompt = f"""You are a helpful and precise AI assistant for the website {domain.domain_name}.
 You must answer the user's question relying ONLY on the provided Context.
-If the context does not contain the answer, or if you are unsure, you must reply EXACTLY with: "{fallback}"
-Do not guess, do not provide external knowledge, and do not hallucinate.
+You may correct minor spelling mistakes in the user's question to match the Context.
+If the provided Context does not contain the information needed to answer the user's question, you must reply EXACTLY with the following string and nothing else: "{fallback}"
+Do not guess, do not provide external knowledge, do not hallucinate, and do not provide any explanations if the context is insufficient.
 
 {prompt_history_context}"""
 
@@ -557,8 +638,18 @@ Do not guess, do not provide external knowledge, and do not hallucinate.
 
                     # Check if response is a fallback/failure
                     failure_reason = None
+                    path_type = "LLM_PATH"
                     if fallback.lower() in full_answer.lower() or "i don't have enough information" in full_answer.lower():
                         failure_reason = "LLM_FAILURE"
+                        path_type = "LLM_FAILURE"
+
+                    logger.info({
+                        "question": user_msg,
+                        "score": max_score,
+                        "matched_question": top_chunks[0].get("payload", {}).get("question"),
+                        "matched_category": category_ids,
+                        "path": path_type
+                    })
 
                     # Schedule background task to log message and cache response
                     asyncio.create_task(run_background_chat_updates(
