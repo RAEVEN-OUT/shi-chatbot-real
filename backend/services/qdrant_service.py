@@ -59,7 +59,7 @@ class QdrantService:
         
         if category_ids:
             must_filters.append(FieldCondition(key="category_id", match=MatchAny(any=category_ids)))
-        elif domain_id:
+        elif domain_id and domain_id.strip():
             must_filters.append(FieldCondition(key="domain_id", match=MatchValue(value=domain_id)))
             
         search_filter = Filter(must=must_filters)

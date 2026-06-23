@@ -484,8 +484,8 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                         ))
                         continue
 
-                # 9. Score Check: Early Exit Fallback (< 0.75)
-                if max_score < 0.75:
+                # 9. Score Check: Early Exit Fallback (< 0.70)
+                if max_score < 0.70:
                     await websocket.send_json({
                         "type": "message",
                         "text": fallback,
@@ -504,7 +504,7 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                     ))
                     continue
 
-                # 10. Normal RAG Path (0.75 - 0.97): Build Context with Memory and Stream Response
+                # 10. Normal RAG Path (0.70 - 0.97): Build Context with Memory and Stream Response
                 # Retrieve last 5 messages for session memory
                 stmt_mem = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.desc()).limit(5)
                 res_mem = await db.execute(stmt_mem)
@@ -519,7 +519,18 @@ async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id
                     history_text = "\n".join([f"{'User' if m.sender == 'user' else 'Assistant' if m.sender == 'bot' else m.sender}: {m.message}" for m in recent_messages])
                     prompt_parts.append(f"Recent Conversation History:\n{history_text}")
                     
-                context_text = "\n\n".join([chunk.get("payload", {}).get("text", "") for chunk in top_chunks])
+                context_parts_list = []
+                for chunk in top_chunks:
+                    payload = chunk.get("payload", {})
+                    if "answer" in payload:
+                        context_parts_list.append(payload["answer"])
+                    else:
+                        text = payload.get("text", "")
+                        if text.startswith("Q:"):
+                            text = text.replace("Q:", "").replace("A:", "").strip()
+                        context_parts_list.append(text)
+                
+                context_text = "\n\n".join(context_parts_list)
                 prompt_parts.append(f"Context from Knowledge Base:\n{context_text}")
                 
                 prompt_history_context = "\n\n".join(prompt_parts)

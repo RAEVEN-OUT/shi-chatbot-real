@@ -51,5 +51,22 @@ class RedisService:
             await self.redis.expire(key, window)
         return count > limit
 
-redis_service = RedisService()
+    async def get_chat_history(self, session_id: str, limit: int = 5) -> list[dict]:
+        """Retrieve recent chat history for a session."""
+        if not session_id:
+            return []
+        data = await self.redis.lrange(f"chat_history:{session_id}", -limit, -1)
+        return [json.loads(msg) for msg in data]
 
+    async def add_to_chat_history(self, session_id: str, question: str, answer: str, expire: int = 86400):
+        """Add a Q&A pair to the session's chat history."""
+        if not session_id:
+            return
+        key = f"chat_history:{session_id}"
+        entry = {"user": question, "ai": answer}
+        await self.redis.rpush(key, json.dumps(entry))
+        # Keep only last 20 messages to prevent infinite growth
+        await self.redis.ltrim(key, -20, -1)
+        await self.redis.expire(key, expire)
+
+redis_service = RedisService()

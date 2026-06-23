@@ -136,15 +136,17 @@ async def create_faq_question(
     
     # Generate embedding and store in Qdrant
     try:
-        text_to_embed = f"Q: {new_q.question}\nA: {new_q.answer}"
+        text_to_embed = new_q.question
+        # We still store the formatted text in Qdrant for reference, but we embed just the question
+        full_text = f"Q: {new_q.question}\nA: {new_q.answer}"
         vector = await ollama_service.generate_embedding(text_to_embed)
         
         # In the new architecture, questions belong to a category, not a domain directly.
         # We store category_id in metadata. 
         await qdrant_service.add_chunk(
             tenant_id=user["postgres_user"].organization_id,
-            domain_id="", # Empty since it applies to all domains with this category
-            text=text_to_embed,
+            domain_id=new_q.faq_id, # passing correct category ID
+            text=full_text,
             vector=vector,
             metadata={"category_id": new_q.faq_id, "question_id": new_q.id, "type": "faq", "question": new_q.question, "answer": new_q.answer}
         )
@@ -196,12 +198,13 @@ async def update_faq_question(
             # We would ideally delete the old chunk or update it.
             # Qdrant upsert with ID requires point ID. Currently we don't store point_id.
             # For this MVP, we will just add a new chunk. A robust implementation needs `delete_chunks_by_metadata`.
-            text_to_embed = f"Q: {q.question}\nA: {q.answer}"
+            text_to_embed = q.question
+            full_text = f"Q: {q.question}\nA: {q.answer}"
             vector = await ollama_service.generate_embedding(text_to_embed)
             await qdrant_service.add_chunk(
                 tenant_id=user["postgres_user"].organization_id,
-                domain_id="",
-                text=text_to_embed,
+                domain_id=q.faq_id,
+                text=full_text,
                 vector=vector,
                 metadata={"category_id": q.faq_id, "question_id": q.id, "type": "faq", "question": q.question, "answer": q.answer}
             )
