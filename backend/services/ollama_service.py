@@ -1,4 +1,5 @@
 import httpx
+import json
 from core.config import settings
 
 class OllamaService:
@@ -35,4 +36,25 @@ class OllamaService:
         data = response.json()
         return data.get("response", "")
 
+    async def generate_response_stream(self, system_prompt: str, user_query: str):
+        """Generate answer streaming configured LLM response via Ollama."""
+        async with self.client.stream(
+            "POST",
+            f"{self.base_url}/api/generate",
+            json={
+                "model": self.llm_model,
+                "prompt": f"{system_prompt}\n\nUser: {user_query}\nAnswer:",
+                "stream": True
+            }
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if line:
+                    try:
+                        chunk = json.loads(line)
+                        yield chunk.get("response", "")
+                    except Exception as e:
+                        print(f"Error parsing Ollama stream chunk: {e}")
+
 ollama_service = OllamaService()
+

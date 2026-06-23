@@ -1,5 +1,5 @@
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, MatchAny
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, MatchAny, HnswConfigDiff, PayloadSchemaType, SearchParams
 from core.config import settings
 import uuid
 
@@ -18,7 +18,17 @@ class QdrantService:
             await self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                hnsw_config=HnswConfigDiff(m=16, ef_construct=200)
             )
+            
+            # Create payload indexes for fast filtering
+            payload_indexes = ["tenant_id", "category_id", "domain_id", "question_id"]
+            for field in payload_indexes:
+                await self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name=field,
+                    field_schema=PayloadSchemaType.KEYWORD
+                )
 
     async def add_chunk(self, tenant_id: str, domain_id: str, text: str, vector: list[float], metadata: dict = None):
         """Add a knowledge chunk with strict tenant and domain metadata."""
@@ -58,7 +68,8 @@ class QdrantService:
             collection_name=self.collection_name,
             query_vector=query_vector,
             query_filter=search_filter,
-            limit=limit
+            limit=limit,
+            search_params=SearchParams(hnsw_ef=128)
         )
         return [{"payload": hit.payload, "score": hit.score} for hit in results]
 

@@ -48,7 +48,7 @@ async def create_faq(faq_data: FAQCreate, db: AsyncSession = Depends(get_db)):
             domain_id=faq_data.domain_id,
             text=chunk_text,
             vector=vector,
-            metadata={"source_type": "faq", "faq_id": new_faq.id}
+            metadata={"source_type": "faq", "faq_id": new_faq.id, "question": faq_data.question, "answer": faq_data.answer}
         )
     except Exception as e:
         # If Qdrant/Ollama fails, rollback might be necessary, but for now we just return the error.

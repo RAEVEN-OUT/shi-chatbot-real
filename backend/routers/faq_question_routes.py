@@ -146,7 +146,7 @@ async def create_faq_question(
             domain_id="", # Empty since it applies to all domains with this category
             text=text_to_embed,
             vector=vector,
-            metadata={"category_id": new_q.faq_id, "question_id": new_q.id, "type": "faq"}
+            metadata={"category_id": new_q.faq_id, "question_id": new_q.id, "type": "faq", "question": new_q.question, "answer": new_q.answer}
         )
     except Exception as e:
         print(f"Error embedding question {new_q.id}: {e}")
@@ -203,7 +203,7 @@ async def update_faq_question(
                 domain_id="",
                 text=text_to_embed,
                 vector=vector,
-                metadata={"category_id": q.faq_id, "question_id": q.id, "type": "faq"}
+                metadata={"category_id": q.faq_id, "question_id": q.id, "type": "faq", "question": q.question, "answer": q.answer}
             )
         except Exception as e:
             print(f"Error re-embedding question {q.id}: {e}")

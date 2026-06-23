@@ -8,16 +8,31 @@ import uuid
 from core.firebase_auth import get_current_user, require_subscriber
 from database.database import get_db
 from database.models import Domain, RetrainingJob, DomainCategory, FAQCategory
+from services.redis_service import redis_service
 
 router = APIRouter(prefix="/domains", tags=["domains"])
 
 class DomainCreate(BaseModel):
-    domain_name: str
-    settings: Optional[dict] = {}
+    name: str
+    domain_url: str
+    welcome_message: Optional[str] = "Welcome to Acme Support."
+    fallback_message: Optional[str] = "Sorry, we could not find an answer. Please contact support."
+    helpline_number: Optional[str] = ""
+    widget_title: Optional[str] = "Support Assistant"
+    widget_color: Optional[str] = "#7C3AED"
+    bot_avatar: Optional[str] = ""
+    is_active: Optional[bool] = True
 
 class DomainUpdate(BaseModel):
-    domain_name: Optional[str] = None
-    settings: Optional[dict] = None
+    name: Optional[str] = None
+    domain_url: Optional[str] = None
+    welcome_message: Optional[str] = None
+    fallback_message: Optional[str] = None
+    helpline_number: Optional[str] = None
+    widget_title: Optional[str] = None
+    widget_color: Optional[str] = None
+    bot_avatar: Optional[str] = None
+    is_active: Optional[bool] = None
 
 class BulkDeleteRequest(BaseModel):
     domain_ids: List[str]
@@ -35,16 +50,36 @@ async def list_domains(
     result = await db.execute(stmt)
     domains = result.scalars().all()
     
+    # Fetch all category IDs for each domain
+    domain_ids = [d.id for d in domains]
+    category_map = {}
+    if domain_ids:
+        cat_stmt = select(DomainCategory.domain_id, DomainCategory.category_id).where(DomainCategory.domain_id.in_(domain_ids))
+        cat_result = await db.execute(cat_stmt)
+        for row in cat_result.all():
+            category_map.setdefault(row.domain_id, []).append(row.category_id)
+    
     return [
         {
             "id": d.id,
             "domain_name": d.domain_name,
+            "domain_url": d.domain_name,
             "organization_id": d.organization_id,
+            "name": (d.settings or {}).get("name", d.domain_name),
+            "is_active": (d.settings or {}).get("is_active", True),
+            "welcome_message": (d.settings or {}).get("welcome_message", "Welcome to Acme Support."),
+            "fallback_message": (d.settings or {}).get("fallback_message", "Sorry, we could not find an answer. Please contact support."),
+            "helpline_number": (d.settings or {}).get("helpline_number", ""),
+            "widget_title": (d.settings or {}).get("widget_title", "Support Assistant"),
+            "widget_color": (d.settings or {}).get("widget_color", "#7C3AED"),
+            "bot_avatar": (d.settings or {}).get("bot_avatar", ""),
+            "category_ids": category_map.get(d.id, []),
             "settings": d.settings,
             "created_at": d.created_at
         }
         for d in domains
     ]
+
 
 @router.get("/names")
 async def list_domain_names(
@@ -73,10 +108,25 @@ async def create_domain(
     if not user["postgres_user"] or not user["postgres_user"].organization_id:
         raise HTTPException(status_code=400, detail="User must belong to an organization to create domains")
         
+    settings_dict = {
+        "name": data.name,
+        "welcome_message": data.welcome_message,
+        "fallback_message": data.fallback_message,
+        "helpline_number": data.helpline_number,
+        "widget_title": data.widget_title,
+        "widget_color": data.widget_color,
+        "bot_avatar": data.bot_avatar,
+        "is_active": data.is_active,
+        "widget_theme_color": data.widget_color,
+        "widget_welcome_message": data.welcome_message,
+        "widget_logo_url": data.bot_avatar,
+        "widget_placeholder": "Type your question..."
+    }
+    
     new_domain = Domain(
-        domain_name=data.domain_name,
+        domain_name=data.domain_url,
         organization_id=user["postgres_user"].organization_id,
-        settings=data.settings
+        settings=settings_dict
     )
     db.add(new_domain)
     await db.commit()
@@ -101,11 +151,33 @@ async def update_domain(
     if not domain:
         raise HTTPException(status_code=404, detail="Domain not found or access denied")
         
-    if data.domain_name is not None:
-        domain.domain_name = data.domain_name
-    if data.settings is not None:
-        # Merge settings
-        domain.settings = {**(domain.settings or {}), **data.settings}
+    if data.domain_url is not None:
+        domain.domain_name = data.domain_url
+        
+    updated_settings = {**(domain.settings or {})}
+    if data.name is not None:
+        updated_settings["name"] = data.name
+    if data.welcome_message is not None:
+        updated_settings["welcome_message"] = data.welcome_message
+    if data.fallback_message is not None:
+        updated_settings["fallback_message"] = data.fallback_message
+    if data.helpline_number is not None:
+        updated_settings["helpline_number"] = data.helpline_number
+    if data.widget_title is not None:
+        updated_settings["widget_title"] = data.widget_title
+    if data.widget_color is not None:
+        updated_settings["widget_color"] = data.widget_color
+        updated_settings["widget_theme_color"] = data.widget_color
+    if data.bot_avatar is not None:
+        updated_settings["bot_avatar"] = data.bot_avatar
+        updated_settings["widget_logo_url"] = data.bot_avatar
+    if data.is_active is not None:
+        updated_settings["is_active"] = data.is_active
+
+    domain.settings = updated_settings
+    
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(domain, "settings")
         
     await db.commit()
     return {"status": "success"}
@@ -199,14 +271,7 @@ async def get_domain_categories(
     cat_result = await db.execute(cat_stmt)
     categories = cat_result.scalars().all()
     
-    return [
-        {
-            "id": c.id,
-            "faq_title": c.faq_title,
-            "status": c.status
-        }
-        for c in categories
-    ]
+    return [c.id for c in categories]
 
 @router.put("/{domain_id}/categories")
 async def update_domain_categories(
@@ -238,6 +303,9 @@ async def update_domain_categories(
         db.add(new_link)
         
     await db.commit()
+    
+    # Invalidate Redis category cache
+    await redis_service.delete_domain_categories(domain.id)
     
     # Note: In a complete implementation, this should trigger a Qdrant sync of all questions 
     # in these categories for this domain. For now, we update the DB.
