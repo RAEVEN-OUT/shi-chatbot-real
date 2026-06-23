@@ -1,0 +1,50 @@
+# dependencies
+node_modules/
+/frontend/node_modules/
+/backend/venv/
+venv/
+.venv/
+env/
+.env
+.env*
+!.env.example
+
+# python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+
+# next.js & build output
+.next/
+/frontend/.next/
+out/
+/frontend/out/
+build/
+dist/
+
+# IDE / system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Firebase key (sensitive)
+firebase-key.json
+backend/firebase-key.json
+
+# Local database / secrets / logs
+*.log
+local_settings.py
+db.sqlite3
+instance/
+qdrant_storage/
+data/
