@@ -43,15 +43,18 @@ TEST_SUITES = [
     }
 ]
 
-async def get_test_domain_id():
+async def get_test_domain_info():
     async with AsyncSessionLocal() as db:
         stmt = select(Domain).limit(1)
         res = await db.execute(stmt)
         domain = res.scalar_one_or_none()
-        return domain.id if domain else None
+        if domain:
+            fallback = (domain.settings or {}).get("fallback_message", "Sorry, we could not find an answer. Please contact support.")
+            return domain.id, fallback
+        return None, None
 
 async def run_evaluation():
-    domain_id = await get_test_domain_id()
+    domain_id, domain_fallback = await get_test_domain_info()
     if not domain_id:
         print("ERROR: No domains found in database to test against.")
         return
@@ -61,7 +64,6 @@ async def run_evaluation():
     
     total_queries = 0
     successful_queries = 0
-    fallback_string = "don't have enough information"
 
     for suite in TEST_SUITES:
         print(f"\nRunning Suite: {suite['name']}")
@@ -88,7 +90,12 @@ async def run_evaluation():
                         data = json.loads(resp.read().decode('utf-8'))
                         answer = data.get("answer", "")
                         
-                        if fallback_string.lower() in answer.lower() or not answer:
+                        is_fallback = (
+                            "don't have enough information" in answer.lower()
+                            or domain_fallback.lower() in answer.lower()
+                            or not answer
+                        )
+                        if is_fallback:
                             print(f"  [FAILED] Query: '{query}' -> Fallback Triggered")
                         else:
                             successful_queries += 1

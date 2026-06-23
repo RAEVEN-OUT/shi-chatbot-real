@@ -2,7 +2,7 @@ import asyncio
 from services.ollama_service import ollama_service
 
 async def run():
-    hist = [{'user': 'for how many days', 'ai': "I don't have enough information to answer that based on the current knowledge base."}]
+    hist = [{'user': 'for how many days', 'ai': "Sorry, we could not find an answer. Please contact support."}]
     q = 'what is shi chatbot'
     print('Rewritten:', await ollama_service.rewrite_query(hist, q))
     

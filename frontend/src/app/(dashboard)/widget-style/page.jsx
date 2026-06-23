@@ -14,16 +14,19 @@ export default function WidgetStyle() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   
-  // Widget custom style parameters
   const [style, setStyle] = useState({
     theme_color: '#7C3AED',
     title: 'Support Chat',
     placeholder: 'Type your question...',
     position: 'right',
-    welcome_message: 'Hello! How can I help you today?',
+    welcome_message: 'Hi! I\'m SHI Chatbot. How can I help you today?',
     logo_url: '',
     border_radius: '12px',
-    font_color: '#ffffff'
+    font_color: '#ffffff',
+    bot_name: 'SHI Chatbot',
+    bot_description: 'An AI assistant that helps visitors using the knowledge base.',
+    farewell_message: 'Goodbye! Have a great day!',
+    human_request_message: 'Please contact our support team or use the available contact options on this website.'
   });
 
   const fetchDomains = async () => {
@@ -196,16 +199,68 @@ export default function WidgetStyle() {
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Welcome Message</label>
-            <input 
-              required 
-              type="text" 
-              value={style.welcome_message} 
-              onChange={e => setStyle({...style, welcome_message: e.target.value})} 
-              className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none" 
-              placeholder="Welcome! How can we help you?" 
-            />
+          <div className="space-y-4">
+            <h3 className="text-sm font-bold text-gray-900 border-b pb-2">Chatbot Personality</h3>
+            
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Bot Name</label>
+              <input 
+                required 
+                type="text" 
+                value={style.bot_name} 
+                onChange={e => setStyle({...style, bot_name: e.target.value})} 
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none" 
+                placeholder="SHI Chatbot" 
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Bot Description</label>
+              <textarea 
+                required 
+                rows="2"
+                value={style.bot_description} 
+                onChange={e => setStyle({...style, bot_description: e.target.value})} 
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none resize-none" 
+                placeholder="An AI assistant that helps visitors using the knowledge base." 
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Welcome Message (Greeting)</label>
+              <input 
+                required 
+                type="text" 
+                value={style.welcome_message} 
+                onChange={e => setStyle({...style, welcome_message: e.target.value})} 
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none" 
+                placeholder="Welcome! How can we help you?" 
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Farewell Message (Goodbye)</label>
+              <input 
+                required 
+                type="text" 
+                value={style.farewell_message} 
+                onChange={e => setStyle({...style, farewell_message: e.target.value})} 
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none" 
+                placeholder="Goodbye! Have a great day!" 
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Human Handoff Request</label>
+              <input 
+                required 
+                type="text" 
+                value={style.human_request_message} 
+                onChange={e => setStyle({...style, human_request_message: e.target.value})} 
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none" 
+                placeholder="Please contact our support team directly." 
+              />
+            </div>
           </div>
 
           <div className="space-y-2">

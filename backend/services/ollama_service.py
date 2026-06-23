@@ -28,8 +28,13 @@ class OllamaService:
             f"{self.base_url}/api/generate",
             json={
                 "model": self.llm_model,
-                "prompt": f"{system_prompt}\n\nUser: {user_query}\nAnswer:",
-                "stream": False
+                "prompt": f"{system_prompt}\n\nQuestion: {user_query}\nAnswer (one paragraph, no preamble):",
+                "stream": False,
+                "options": {
+                    "temperature": 0.1,
+                    "top_p": 0.9,
+                    "stop": ["\nUser:", "\nQuestion:", "\nHuman:"]
+                }
             }
         )
         response.raise_for_status()
@@ -65,8 +70,13 @@ class OllamaService:
             f"{self.base_url}/api/generate",
             json={
                 "model": self.llm_model,
-                "prompt": f"{system_prompt}\n\nUser: {user_query}\nAnswer:",
-                "stream": True
+                "prompt": f"{system_prompt}\n\nQuestion: {user_query}\nAnswer (one paragraph, no preamble):",
+                "stream": True,
+                "options": {
+                    "temperature": 0.1,
+                    "top_p": 0.9,
+                    "stop": ["\nUser:", "\nQuestion:", "\nHuman:"]
+                }
             }
         ) as response:
             response.raise_for_status()

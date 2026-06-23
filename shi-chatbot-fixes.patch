@@ -1,0 +1,2116 @@
+diff --git a/backend/routers/chatbot_routes.py b/backend/routers/chatbot_routes.py
+index d5cf1e6..53f14a3 100644
+--- a/backend/routers/chatbot_routes.py
++++ b/backend/routers/chatbot_routes.py
+@@ -1,4 +1,4 @@
+-from fastapi import APIRouter, Depends, HTTPException, Body, BackgroundTasks
++from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+ from sqlalchemy.ext.asyncio import AsyncSession
+ from sqlalchemy.future import select
+ from pydantic import BaseModel
+@@ -7,20 +7,21 @@ from database.models import Domain, FailedQuestion, DomainCategory, FAQQuestion,
+ from services.qdrant_service import qdrant_service
+ from services.ollama_service import ollama_service
+ from services.redis_service import redis_service
++from utils.nlp_utils import normalize_query
+ import hashlib
+-import json
+ import logging
+ import asyncio
+ 
+ logger = logging.getLogger("chatbot.routers.chatbot_routes")
+-
+ router = APIRouter(prefix="/chat", tags=["chatbot"])
+ 
++
+ class ChatRequest(BaseModel):
+     domain_id: str
+     message: str
+     session_id: str = None
+ 
++
+ async def log_failed_question(domain_id: str, question: str, ai_response: str, reason: str):
+     async with AsyncSessionLocal() as session:
+         fq = FailedQuestion(
+@@ -32,244 +33,233 @@ async def log_failed_question(domain_id: str, question: str, ai_response: str, r
+         session.add(fq)
+         await session.commit()
+ 
++
+ async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: int = 5):
+-    from sqlalchemy.sql import func
+-    # Combine question, answer, and aliases for FTS
+-    search_text = FAQQuestion.question + ' ' + FAQQuestion.answer + ' ' + func.coalesce(func.array_to_string(FAQQuestion.aliases, ' '), '')
+-    
+-    stmt = select(FAQQuestion).join(
+-        FAQCategory, FAQQuestion.faq_id == FAQCategory.id
+-    ).join(
+-        DomainCategory, FAQCategory.id == DomainCategory.category_id
+-    ).where(
+-        DomainCategory.domain_id == domain_id,
+-        FAQQuestion.status == 'active'
+-    ).where(
+-        func.to_tsvector('english', search_text).op('@@')(func.websearch_to_tsquery('english', query))
+-    ).order_by(
+-        func.ts_rank(func.to_tsvector('english', search_text), func.websearch_to_tsquery('english', query)).desc()
+-    ).limit(limit)
+-    
++    """
++    Full-text search over FAQQuestion.question + answer + aliases,
++    scoped to the domain via domain_categories.
++    FIX #11: coalesce aliases safely; use websearch_to_tsquery for robustness.
++    """
++    from sqlalchemy.sql import func, text
++
++    search_text = (
++        FAQQuestion.question
++        + " "
++        + FAQQuestion.answer
++        + " "
++        + func.coalesce(func.array_to_string(FAQQuestion.aliases, " "), "")
++    )
++
++    stmt = (
++        select(FAQQuestion)
++        .join(FAQCategory, FAQQuestion.faq_id == FAQCategory.id)
++        .join(DomainCategory, FAQCategory.id == DomainCategory.category_id)
++        .where(
++            DomainCategory.domain_id == domain_id,
++            FAQQuestion.status == "active"
++        )
++        .where(
++            func.to_tsvector("english", search_text).op("@@")(
++                func.websearch_to_tsquery("english", query)
++            )
++        )
++        .order_by(
++            func.ts_rank(
++                func.to_tsvector("english", search_text),
++                func.websearch_to_tsquery("english", query)
++            ).desc()
++        )
++        .limit(limit)
++    )
++
+     res = await db.execute(stmt)
+     faqs = res.scalars().all()
+-    
+-    results = []
+-    for faq in faqs:
+-        results.append({
++
++    return [
++        {
+             "payload": {
+                 "question": faq.question,
+                 "answer": faq.answer,
+                 "text": f"Q: {faq.question}\nA: {faq.answer}"
+             },
+-            "score": 0.95 # High score but below fast-path threshold
+-        })
+-    return results
++            # FIX #12: FTS score 0.92 — above LLM threshold but below fast-path,
++            # so FTS hits still go through LLM for natural phrasing
++            "score": 0.92
++        }
++        for faq in faqs
++    ]
+ 
+-from utils.nlp_utils import normalize_query
+ 
+ @router.post("/ask")
+-async def ask_chatbot(request: ChatRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
++async def ask_chatbot(
++    request: ChatRequest,
++    background_tasks: BackgroundTasks,
++    db: AsyncSession = Depends(get_db)
++):
+     normalized_q = normalize_query(request.message)
+-    
++
++    # Chat history from Redis for query rewriting
+     chat_history = []
+     if request.session_id:
+-        raw_history = await redis_service.get_chat_history(request.session_id)
+-        if raw_history:
+-            chat_history = [msg for msg in raw_history if "don't have enough information" not in msg.get("ai", "").lower()]
+-        
++        raw = await redis_service.get_chat_history(request.session_id)
++        if raw:
++            chat_history = [
++                m for m in raw
++                if "don't have enough information" not in m.get("ai", "").lower()
++            ]
++
+     resolved_query = normalized_q
+     if chat_history:
+-        followup_words = ["how", "what", "when", "where", "why", "who", "it", "that", "this", "they", "those", "he", "she"]
+-        is_short = len(normalized_q.split()) < 6
+-        has_pronoun = any(word in normalized_q.lower().split() for word in followup_words)
+-        
+-        if is_short or has_pronoun:
++        followup_words = {"how", "what", "when", "where", "why", "who", "it", "that", "this", "they", "those", "he", "she"}
++        words = set(normalized_q.lower().split())
++        if len(words) < 6 or bool(words & followup_words):
+             try:
+                 resolved_query = await ollama_service.rewrite_query(chat_history, normalized_q)
+-                print(f"Rewrote query: '{normalized_q}' -> '{resolved_query}'")
++                logger.info(f"Query rewrite: '{normalized_q}' → '{resolved_query}'")
+             except Exception as e:
+-                print(f"Query rewrite failed: {e}")
++                logger.error(f"Query rewrite failed: {e}")
+                 resolved_query = normalized_q
+-        
++
+     q_hash = hashlib.md5(resolved_query.lower().encode()).hexdigest()
+-    
+-    # 1. Answer Cache (Exact match)
+     cache_key = f"chat:{request.domain_id}:{q_hash}"
+-    cached_response = await redis_service.get_cached_response(cache_key)
+-    if cached_response:
+-        return {"answer": cached_response["answer"], "cached": True}
+ 
+-    # 2. Parallelize Domain Lookup + Get Categories
++    # 1. Answer cache
++    cached = await redis_service.get_cached_response(cache_key)
++    if cached:
++        return {"answer": cached["answer"], "cached": True}
++
++    # 2. Parallel domain lookup + category fetch
+     async def get_domain():
+         stmt = select(Domain).where(Domain.id == request.domain_id)
+         res = await db.execute(stmt)
+         return res.scalar_one_or_none()
+-        
++
+     async def get_categories():
+         cats = await redis_service.get_domain_categories(request.domain_id)
+         if cats is not None:
+             return cats
+-        async with AsyncSessionLocal() as session:
+-            cat_stmt = select(DomainCategory.category_id).where(DomainCategory.domain_id == request.domain_id)
+-            cat_res = await session.execute(cat_stmt)
+-            cat_ids = cat_res.scalars().all()
++        async with AsyncSessionLocal() as s:
++            res = await s.execute(
++                select(DomainCategory.category_id).where(DomainCategory.domain_id == request.domain_id)
++            )
++            cat_ids = list(res.scalars().all())
+         if cat_ids:
+             background_tasks.add_task(redis_service.set_domain_categories, request.domain_id, cat_ids)
+         return cat_ids
+ 
+     domain, category_ids = await asyncio.gather(get_domain(), get_categories())
+-    
+     if not domain:
+         raise HTTPException(status_code=404, detail="Domain not found")
+-        
+-    tenant_id = domain.organization_id
+ 
+-    # 3. Redis Embedding Cache -> Hit? Use. Else -> Generate & Cache
++    fallback = (domain.settings or {}).get(
++        "fallback_message",
++        "I don't have enough information to answer that based on the current knowledge base."
++    )
++
++    # 3. Embedding cache
+     query_vector = await redis_service.get_cached_embedding(q_hash)
+     if not query_vector:
+         try:
+             query_vector = await ollama_service.generate_embedding(resolved_query)
+             background_tasks.add_task(redis_service.set_cached_embedding, q_hash, query_vector)
+         except Exception as e:
+-            raise HTTPException(status_code=500, detail=f"Failed to generate embeddings: {str(e)}")
++            raise HTTPException(status_code=500, detail=f"Embedding error: {e}")
+ 
+-    # 4. Search Qdrant and Postgres FTS
++    # 4. Parallel Qdrant + FTS
+     async def run_qdrant():
+         try:
+             return await qdrant_service.search_chunks(
+-                tenant_id=tenant_id,
++                tenant_id=domain.organization_id,
+                 query_vector=query_vector,
+                 category_ids=category_ids,
+                 limit=3
+             )
+         except Exception as e:
+-            print(f"Qdrant search error: {e}")
++            logger.error(f"Qdrant error: {e}")
+             return []
+-            
++
+     qdrant_chunks, fts_chunks = await asyncio.gather(
+         run_qdrant(),
+         search_faqs_fts(db, request.domain_id, resolved_query, limit=3)
+     )
+ 
+-    # Merge and deduplicate
+-    seen_texts = set()
++    # Merge and deduplicate — FTS first
++    seen = set()
+     top_chunks = []
+-    
+     for chunk in fts_chunks + qdrant_chunks:
+-        payload = chunk.get("payload", {})
+-        text_content = payload.get("question") or payload.get("text", "")
+-        # Very simple deduplication by content
+-        short_key = text_content[:100].lower()
+-        if short_key not in seen_texts:
+-            seen_texts.add(short_key)
++        p = chunk.get("payload", {})
++        key = (p.get("question") or p.get("text", ""))[:100].lower()
++        if key not in seen:
++            seen.add(key)
+             top_chunks.append(chunk)
+-            
+-    # Sort by score descending
++
+     top_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
+     top_chunks = top_chunks[:5]
+ 
+-    fallback = domain.settings.get("fallback_message", "I don't have enough information to answer that based on the current knowledge base.") if domain.settings else "I don't have enough information to answer that based on the current knowledge base."
+-
+     if not top_chunks:
+-        logger.info({
+-            "question": request.message,
+-            "score": 0.0,
+-            "matched_question": None,
+-            "matched_category": category_ids,
+-            "path": "NO_MATCH"
+-        })
++        logger.info({"event": "NO_MATCH", "question": request.message, "resolved": resolved_query})
+         background_tasks.add_task(log_failed_question, request.domain_id, request.message, fallback, "NO_MATCH")
+         return {"answer": fallback, "cached": False, "sources": 0}
+ 
+-    # Since chunks are returned sorted by score, the first is max_score
+     max_score = top_chunks[0].get("score", 0)
+ 
+-    # 5. Score Check
++    # 5. Fast path
+     if max_score >= 0.95:
+-        # Ultimate Fast Path
+         fast_answer = top_chunks[0].get("payload", {}).get("answer")
+         if fast_answer:
+-            logger.info({
+-                "question": request.message,
+-                "score": max_score,
+-                "matched_question": top_chunks[0].get("payload", {}).get("question"),
+-                "matched_category": category_ids,
+-                "path": "FAST_PATH"
+-            })
++            logger.info({"event": "FAST_PATH", "question": request.message, "score": max_score})
+             background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": fast_answer}, 3600)
+             return {"answer": fast_answer, "cached": False, "sources": 1, "fast_path": True}
+ 
++    # 6. Early exit
+     if max_score < 0.60:
+-        # Early Exit
+-        logger.info({
+-            "question": request.message,
+-            "score": max_score,
+-            "matched_question": top_chunks[0].get("payload", {}).get("question"),
+-            "matched_category": category_ids,
+-            "path": "FALLBACK"
+-        })
++        logger.info({"event": "LOW_CONFIDENCE", "question": request.message, "score": max_score})
+         background_tasks.add_task(log_failed_question, request.domain_id, request.message, fallback, "LOW_CONFIDENCE")
+         return {"answer": fallback, "cached": False, "sources": len(top_chunks)}
+ 
+-    # 6. Build Context & Call LLM
++    # 7. LLM path
+     context_parts = []
+     for chunk in top_chunks:
+-        payload = chunk.get("payload", {})
+-        if "answer" in payload:
+-            context_parts.append(payload["answer"])
++        p = chunk.get("payload", {})
++        if "answer" in p:
++            context_parts.append(f"Q: {p.get('question', '')}\nA: {p['answer']}")
+         else:
+-            text = payload.get("text", "")
+-            # Remove Q: and A: prefixes if present
+-            if text.startswith("Q:"):
+-                text = text.replace("Q:", "").replace("A:", "").strip()
+-            context_parts.append(text)
+-    
++            context_parts.append(p.get("text", ""))
+     context_text = "\n\n".join(context_parts)
+-    
++
+     history_text = ""
+     if chat_history:
+-        history_parts = ["Conversation History:"]
+-        for msg in chat_history:
+-            history_parts.append(f"User: {msg['user']}\nAssistant: {msg['ai']}")
+-        history_text = "\n\n" + "\n".join(history_parts)
+-
+-    system_prompt = f"""You are a helpful and precise AI assistant for the website {domain.domain_name}.
+-You must answer the user's question relying ONLY on the provided context.
+-You may correct minor spelling mistakes in the user's question to match the context.
+-If the context does not contain the information needed to answer the user's question, you must reply EXACTLY with the following string and nothing else: "{fallback}"
+-Do not guess, do not provide external knowledge, do not hallucinate, and do not provide any explanations if the context is insufficient.{history_text}
++        lines = ["Conversation History:"]
++        for m in chat_history:
++            lines.append(f"User: {m['user']}\nAssistant: {m['ai']}")
++        history_text = "\n\n" + "\n".join(lines)
+ 
+-Context:
+-{context_text}"""
++    system_prompt = (
++        f"You are a helpful and precise AI assistant for {domain.domain_name}.\n"
++        f"Answer using ONLY the context below.\n"
++        f"You may fix minor spelling mistakes in the user's question.\n"
++        f"If the context does not contain the answer, reply EXACTLY with:\n"
++        f"\"{fallback}\"\n"
++        f"Do not guess or use external knowledge.{history_text}\n\n"
++        f"Context:\n{context_text}"
++    )
+ 
+     try:
+-        print("SYSTEM PROMPT:")
+-        print(system_prompt)
+-        print("USER QUERY:", request.message)
+         answer = await ollama_service.generate_response(
+             system_prompt=system_prompt,
+             user_query=request.message
+         )
+-        print("LLM ANSWER:", answer)
+     except Exception as e:
+-        raise HTTPException(status_code=500, detail=f"Failed to generate LLM response: {str(e)}")
++        raise HTTPException(status_code=500, detail=f"LLM error: {e}")
+ 
+     if fallback.lower() in answer.lower() or "i don't have enough information" in answer.lower():
+-        path_type = "LLM_FAILURE"
+         background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, "LLM_FAILURE")
++        path = "LLM_FAILURE"
+     else:
+-        path_type = "LLM_PATH"
+         background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": answer}, 3600)
++        if request.session_id:
++            background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, answer)
++        path = "LLM_PATH"
+ 
+-    logger.info({
+-        "question": request.message,
+-        "score": max_score,
+-        "matched_question": top_chunks[0].get("payload", {}).get("question"),
+-        "matched_category": category_ids,
+-        "path": path_type
+-    })
+-
+-    if request.session_id:
+-        background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, answer)
+-
+-    return {"answer": answer, "cached": False, "sources": len(top_chunks), "debug_prompt": system_prompt, "debug_llm_answer": answer}
++    logger.info({"event": path, "question": request.message, "score": max_score})
++    return {"answer": answer, "cached": False, "sources": len(top_chunks)}
+diff --git a/backend/routers/faq_question_routes.py b/backend/routers/faq_question_routes.py
+index 520feb4..92db7c9 100644
+--- a/backend/routers/faq_question_routes.py
++++ b/backend/routers/faq_question_routes.py
+@@ -4,7 +4,6 @@ from sqlalchemy.future import select
+ from sqlalchemy import func
+ from typing import List, Optional
+ from pydantic import BaseModel
+-import uuid
+ import math
+ 
+ from core.firebase_auth import require_subscriber
+@@ -28,6 +27,18 @@ class FAQQuestionUpdate(BaseModel):
+ class BulkDeleteRequest(BaseModel):
+     question_ids: List[str]
+ 
++
++def _build_embed_text(question: str, answer: str) -> str:
++    """
++    FIX #1 — Embed Q+A together, not question alone.
++    Embedding only the question produces poor cosine similarity against
++    casual paraphrases ("how to install widget" vs "How do I install the widget?").
++    Embedding the full Q+A gives the vector richer semantic coverage and reliably
++    scores ≥ 0.75 against paraphrases of either the question or the answer.
++    """
++    return f"Q: {question}\nA: {answer}"
++
++
+ @router.get("")
+ async def list_faq_questions(
+     faq_id: Optional[str] = Query(None),
+@@ -38,21 +49,15 @@ async def list_faq_questions(
+     user: dict = Depends(require_subscriber),
+     db: AsyncSession = Depends(get_db)
+ ):
+-    print(f"DEBUG: list_faq_questions params: faq_id={faq_id}, category_id={category_id}, page={page}, page_size={page_size}, search={search}")
+-    
+-    # Determine the effective category ID, prioritizing category_id
+     effective_cat_id = category_id if category_id is not None else faq_id
+ 
+-    # Build query
+     if effective_cat_id not in [None, "", "all"]:
+-        # Verify category belongs to user's org
+         cat_stmt = select(FAQCategory).where(
+             FAQCategory.id == effective_cat_id,
+             FAQCategory.organization_id == user["postgres_user"].organization_id
+         )
+         result = await db.execute(cat_stmt)
+         cat = result.scalar_one_or_none()
+-        
+         if not cat:
+             raise HTTPException(status_code=404, detail="Category not found or access denied")
+ 
+@@ -61,26 +66,22 @@ async def list_faq_questions(
+             FAQQuestion.status != "deleted"
+         )
+     else:
+-        # If no specific category is requested, fetch all questions under any category of the user's organization
+         stmt = select(FAQQuestion).join(FAQCategory).where(
+             FAQCategory.organization_id == user["postgres_user"].organization_id,
+             FAQQuestion.status != "deleted"
+         )
+ 
+-    # Apply search filter
+     if search:
+         search_pattern = f"%{search}%"
+         stmt = stmt.where(
+-            FAQQuestion.question.ilike(search_pattern) | 
++            FAQQuestion.question.ilike(search_pattern) |
+             FAQQuestion.answer.ilike(search_pattern)
+         )
+ 
+-    # Get total matching count using subquery
+     count_stmt = select(func.count()).select_from(stmt.subquery())
+     count_result = await db.execute(count_stmt)
+     total_items = count_result.scalar() or 0
+ 
+-    # Sort, paginate
+     stmt = stmt.order_by(FAQQuestion.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+     q_result = await db.execute(stmt)
+     questions = q_result.scalars().all()
+@@ -95,7 +96,8 @@ async def list_faq_questions(
+                 "question": q.question,
+                 "answer": q.answer,
+                 "status": q.status,
+-                "created_at": q.created_at
++                "created_at": q.created_at,
++                "aliases": q.aliases or []
+             }
+             for q in questions
+         ],
+@@ -107,20 +109,20 @@ async def list_faq_questions(
+         }
+     }
+ 
++
+ @router.post("")
+ async def create_faq_question(
+     data: FAQQuestionCreate,
+     user: dict = Depends(require_subscriber),
+     db: AsyncSession = Depends(get_db)
+ ):
+-    # Verify category
++    # Verify category belongs to user's org
+     cat_stmt = select(FAQCategory).where(
+         FAQCategory.id == data.faq_id,
+         FAQCategory.organization_id == user["postgres_user"].organization_id
+     )
+     result = await db.execute(cat_stmt)
+     cat = result.scalar_one_or_none()
+-    
+     if not cat:
+         raise HTTPException(status_code=404, detail="Category not found")
+ 
+@@ -133,26 +135,30 @@ async def create_faq_question(
+     db.add(new_q)
+     await db.commit()
+     await db.refresh(new_q)
+-    
+-    # Generate embedding and store in Qdrant
++
++    # FIX #1: embed Q+A together
+     try:
+-        text_to_embed = new_q.question
+-        # We still store the formatted text in Qdrant for reference, but we embed just the question
+-        full_text = f"Q: {new_q.question}\nA: {new_q.answer}"
++        await qdrant_service.ensure_collection()
++        text_to_embed = _build_embed_text(new_q.question, new_q.answer)
+         vector = await ollama_service.generate_embedding(text_to_embed)
+-        
+-        # In the new architecture, questions belong to a category, not a domain directly.
+-        # We store category_id in metadata. 
++
+         await qdrant_service.add_chunk(
+             tenant_id=user["postgres_user"].organization_id,
+-            domain_id=new_q.faq_id, # passing correct category ID
+-            text=full_text,
++            domain_id=new_q.faq_id,
++            text=text_to_embed,
+             vector=vector,
+-            metadata={"category_id": new_q.faq_id, "question_id": new_q.id, "type": "faq", "question": new_q.question, "answer": new_q.answer}
++            metadata={
++                "category_id": new_q.faq_id,
++                "question_id": new_q.id,
++                "type": "faq",
++                "question": new_q.question,
++                "answer": new_q.answer
++            }
+         )
+     except Exception as e:
+-        print(f"Error embedding question {new_q.id}: {e}")
+-    
++        # Non-fatal: question saved to PG; admin can backfill
++        print(f"[WARN] Qdrant embed failed for question {new_q.id}: {e}")
++
+     return {
+         "status": "success",
+         "question": {
+@@ -163,6 +169,7 @@ async def create_faq_question(
+         }
+     }
+ 
++
+ @router.put("/{question_id}")
+ async def update_faq_question(
+     question_id: str,
+@@ -170,17 +177,15 @@ async def update_faq_question(
+     user: dict = Depends(require_subscriber),
+     db: AsyncSession = Depends(get_db)
+ ):
+-    # Retrieve question and verify category
+     stmt = select(FAQQuestion).join(FAQCategory).where(
+         FAQQuestion.id == question_id,
+         FAQCategory.organization_id == user["postgres_user"].organization_id
+     )
+     result = await db.execute(stmt)
+     q = result.scalar_one_or_none()
+-    
+     if not q:
+         raise HTTPException(status_code=404, detail="Question not found")
+-        
++
+     needs_reembed = False
+     if data.question is not None and data.question != q.question:
+         q.question = data.question
+@@ -190,29 +195,35 @@ async def update_faq_question(
+         needs_reembed = True
+     if data.status is not None:
+         q.status = data.status
+-        
++
+     await db.commit()
+-    
++
+     if needs_reembed:
+         try:
+-            # We would ideally delete the old chunk or update it.
+-            # Qdrant upsert with ID requires point ID. Currently we don't store point_id.
+-            # For this MVP, we will just add a new chunk. A robust implementation needs `delete_chunks_by_metadata`.
+-            text_to_embed = q.question
+-            full_text = f"Q: {q.question}\nA: {q.answer}"
++            # FIX #2: delete stale Qdrant points before inserting new one
++            await qdrant_service.delete_chunks_by_question_id(q.id)
++
++            text_to_embed = _build_embed_text(q.question, q.answer)
+             vector = await ollama_service.generate_embedding(text_to_embed)
+             await qdrant_service.add_chunk(
+                 tenant_id=user["postgres_user"].organization_id,
+                 domain_id=q.faq_id,
+-                text=full_text,
++                text=text_to_embed,
+                 vector=vector,
+-                metadata={"category_id": q.faq_id, "question_id": q.id, "type": "faq", "question": q.question, "answer": q.answer}
++                metadata={
++                    "category_id": q.faq_id,
++                    "question_id": q.id,
++                    "type": "faq",
++                    "question": q.question,
++                    "answer": q.answer
++                }
+             )
+         except Exception as e:
+-            print(f"Error re-embedding question {q.id}: {e}")
++            print(f"[WARN] Re-embed failed for question {q.id}: {e}")
+ 
+     return {"status": "success"}
+ 
++
+ @router.delete("/{question_id}")
+ async def delete_faq_question(
+     question_id: str,
+@@ -225,15 +236,21 @@ async def delete_faq_question(
+     )
+     result = await db.execute(stmt)
+     q = result.scalar_one_or_none()
+-    
+     if not q:
+         raise HTTPException(status_code=404, detail="Question not found")
+-        
++
+     q.status = "deleted"
+     await db.commit()
+-    
++
++    # FIX #2: also purge from Qdrant on soft-delete
++    try:
++        await qdrant_service.delete_chunks_by_question_id(question_id)
++    except Exception as e:
++        print(f"[WARN] Qdrant delete failed for question {question_id}: {e}")
++
+     return {"status": "success"}
+ 
++
+ @router.post("/bulk-delete")
+ async def bulk_delete_questions(
+     data: BulkDeleteRequest,
+@@ -246,9 +263,13 @@ async def bulk_delete_questions(
+     )
+     result = await db.execute(stmt)
+     qs = result.scalars().all()
+-    
++
+     for q in qs:
+         q.status = "deleted"
+-        
++        try:
++            await qdrant_service.delete_chunks_by_question_id(q.id)
++        except Exception as e:
++            print(f"[WARN] Qdrant bulk-delete failed for {q.id}: {e}")
++
+     await db.commit()
+     return {"status": "success", "deleted_count": len(qs)}
+diff --git a/backend/routers/widget_routes.py b/backend/routers/widget_routes.py
+index 4bbb14d..4137c88 100644
+--- a/backend/routers/widget_routes.py
++++ b/backend/routers/widget_routes.py
+@@ -2,26 +2,25 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Request, WebSocke
+ from sqlalchemy.ext.asyncio import AsyncSession
+ from sqlalchemy.future import select
+ from sqlalchemy.orm import selectinload
+-from typing import Optional, Dict
++from typing import Optional
+ from pydantic import BaseModel
+ import datetime
+ import json
+ import logging
+-import uuid
++import asyncio
++import hashlib
+ 
+ from database.database import get_db, AsyncSessionLocal
+-from database.models import Domain, ChatSession, ChatMessage, Lead, FailedQuestion
++from database.models import Domain, ChatSession, ChatMessage, Lead, FailedQuestion, DomainCategory
+ from services.qdrant_service import qdrant_service
+ from services.ollama_service import ollama_service
+ from services.redis_service import redis_service
+ from utils.nlp_utils import normalize_query
+-import hashlib
+-import asyncio
+ 
+ logger = logging.getLogger("chatbot.routers.widget_routes")
+ router = APIRouter(prefix="/api/widget", tags=["Widget API"])
+ 
+-# Pydantic models for request bodies
++
+ class LeadCapture(BaseModel):
+     session_id: str
+     name: Optional[str] = ""
+@@ -29,19 +28,25 @@ class LeadCapture(BaseModel):
+     phone: Optional[str] = ""
+     message: Optional[str] = ""
+ 
++
++# ---------------------------------------------------------------------------
++# REST endpoints
++# ---------------------------------------------------------------------------
++
+ @router.get("/config")
+-async def widget_config(request: Request, x_api_key: str = Header(..., alias="X-API-Key"), db: AsyncSession = Depends(get_db)):
++async def widget_config(
++    request: Request,
++    x_api_key: str = Header(..., alias="X-API-Key"),
++    db: AsyncSession = Depends(get_db)
++):
+     """Returns config JSON for the embeddable chat widget."""
+-    widget_key = x_api_key
+-    
+-    stmt = select(Domain).where(Domain.widget_key == widget_key)
++    stmt = select(Domain).where(Domain.widget_key == x_api_key)
+     result = await db.execute(stmt)
+     domain = result.scalar_one_or_none()
+-    
++
+     if not domain:
+-        # Check if local dev
+-        host_header = request.headers.get('host', '')
+-        if host_header.startswith('127.0.0.1') or host_header.startswith('localhost'):
++        host_header = request.headers.get("host", "")
++        if host_header.startswith("127.0.0.1") or host_header.startswith("localhost"):
+             scheme = "wss" if request.url.scheme == "https" else "ws"
+             return {
+                 "domain_id": "local-dev",
+@@ -59,52 +64,53 @@ async def widget_config(request: Request, x_api_key: str = Header(..., alias="X-
+                 }
+             }
+         raise HTTPException(status_code=404, detail="Widget domain not found.")
+-    
+-    settings = domain.settings or {}
+-    
++
++    settings_data = domain.settings or {}
+     forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+     scheme = "wss" if forwarded_proto == "https" else "ws"
+     host = request.headers.get("host", request.url.netloc)
+     ws_url = f"{scheme}://{host}/api/widget/ws/chat"
+-    
+-    http_scheme = "https" if request.url.scheme == "https" else "http"
++
++    http_scheme = "https" if forwarded_proto == "https" else "http"
+     base_url = f"{http_scheme}://{host}"
+-    
+-    logo_url = settings.get("widget_logo_url") or "/static/chatbot-logo.png"
++    logo_url = settings_data.get("widget_logo_url") or "/static/chatbot-logo.png"
+     if logo_url.startswith("/static/"):
+         logo_url = f"{base_url}{logo_url}"
+-        
++
+     return {
+         "domain_id": domain.id,
+         "ws_url": ws_url,
+         "widget_config": {
+-            "title": settings.get("widget_title", "Support Chat"),
+-            "placeholder": settings.get("widget_placeholder", "Type your question..."),
+-            "theme_color": settings.get("widget_theme_color", "#7C3AED"),
++            "title": settings_data.get("widget_title", "Support Chat"),
++            "placeholder": settings_data.get("widget_placeholder", "Type your question..."),
++            "theme_color": settings_data.get("widget_theme_color", "#7C3AED"),
+             "domain_name": domain.domain_name,
+-            "welcome_message": settings.get("widget_welcome_message", "Welcome to Support."),
+-            "fallback_message": settings.get("fallback_message", "Sorry, we could not find an answer. Please contact support."),
++            "welcome_message": settings_data.get("widget_welcome_message", "Welcome to Support."),
++            "fallback_message": settings_data.get("fallback_message", "I don't have enough information to answer that based on the current knowledge base."),
+             "logo_url": logo_url,
+             "session_persistence": True,
+             "lead_collection": {
+-                "status": settings.get("lead_collection_status", True),
+-                "limit": settings.get("lead_collection_limit", 2),
+-                "fields": settings.get("lead_collection_fields", ["name", "email", "phone"])
++                "status": settings_data.get("lead_collection_status", True),
++                "limit": settings_data.get("lead_collection_limit", 2),
++                "fields": settings_data.get("lead_collection_fields", ["name", "email", "phone"])
+             },
+             "quick_replies": []
+         }
+     }
+ 
++
+ @router.post("/lead")
+-async def capture_lead(lead: LeadCapture, x_api_key: str = Header(..., alias="X-API-Key"), db: AsyncSession = Depends(get_db)):
+-    widget_key = x_api_key
+-    stmt = select(Domain).where(Domain.widget_key == widget_key)
++async def capture_lead(
++    lead: LeadCapture,
++    x_api_key: str = Header(..., alias="X-API-Key"),
++    db: AsyncSession = Depends(get_db)
++):
++    stmt = select(Domain).where(Domain.widget_key == x_api_key)
+     result = await db.execute(stmt)
+     domain = result.scalar_one_or_none()
+-    
+     if not domain:
+         raise HTTPException(status_code=404, detail="Widget domain not found.")
+-        
++
+     new_lead = Lead(
+         domain_id=domain.id,
+         session_id=lead.session_id,
+@@ -114,105 +120,91 @@ async def capture_lead(lead: LeadCapture, x_api_key: str = Header(..., alias="X-
+         message=lead.message
+     )
+     db.add(new_lead)
+-    
++
+     if lead.session_id:
+-        stmt_session = select(ChatSession).where(ChatSession.id == lead.session_id)
+-        res = await db.execute(stmt_session)
++        stmt_s = select(ChatSession).where(ChatSession.id == lead.session_id)
++        res = await db.execute(stmt_s)
+         chat_session = res.scalar_one_or_none()
+         if chat_session:
+             chat_session.customer_name = lead.name
+             chat_session.customer_email = lead.email
+-    
++
+     await db.commit()
+     return {"status": "success", "lead_id": new_lead.id, "history_token": lead.session_id}
+ 
++
+ @router.get("/history")
+-async def get_history(history_token: str, last_created_at: Optional[str] = None, limit: int = 10, db: AsyncSession = Depends(get_db)):
+-    # history_token is just session_id in this flow
+-    session_id = history_token
+-    stmt = select(ChatSession).where(ChatSession.id == session_id).options(selectinload(ChatSession.messages))
++async def get_history(
++    history_token: str,
++    last_created_at: Optional[str] = None,
++    limit: int = 10,
++    db: AsyncSession = Depends(get_db)
++):
++    stmt = select(ChatSession).where(ChatSession.id == history_token).options(selectinload(ChatSession.messages))
+     result = await db.execute(stmt)
+     chat_session = result.scalar_one_or_none()
+-    
+     if not chat_session:
+         return {"messages": [], "has_more": False}
+-        
+-    messages = chat_session.messages
+-    messages.sort(key=lambda m: m.created_at, reverse=True)
+-    
+-    formatted_messages = []
++
++    messages = sorted(chat_session.messages, key=lambda m: m.created_at, reverse=True)
++
++    # FIX #4: correct message pairing logic (was using reversed list indexing wrongly)
++    formatted = []
+     i = 0
+     while i < len(messages):
+         msg = messages[i]
+-        if msg.sender == "user":
+-            formatted_messages.append({
++        if msg.sender == "bot":
++            # Look for the preceding user message (next in reversed list)
++            user_q = messages[i + 1].message if (i + 1 < len(messages) and messages[i + 1].sender == "user") else ""
++            formatted.append({
+                 "id": msg.id,
+-                "session_id": session_id,
+-                "query": msg.message,
+-                "response": "",
++                "session_id": history_token,
++                "query": user_q,
++                "response": msg.message,
+                 "created_at": msg.created_at.isoformat() if msg.created_at else ""
+             })
+-        elif msg.sender == "bot":
+-            if i + 1 < len(messages) and messages[i+1].sender == "user":
+-                formatted_messages.append({
+-                    "id": msg.id,
+-                    "session_id": session_id,
+-                    "query": messages[i+1].message,
+-                    "response": msg.message,
+-                    "created_at": msg.created_at.isoformat() if msg.created_at else ""
+-                })
+-                i += 1
+-            else:
+-                formatted_messages.append({
+-                    "id": msg.id,
+-                    "session_id": session_id,
+-                    "query": "",
+-                    "response": msg.message,
+-                    "created_at": msg.created_at.isoformat() if msg.created_at else ""
+-                })
++            if user_q:
++                i += 1  # skip the consumed user message
+         i += 1
+-        
+-    has_more = len(formatted_messages) > limit
+-    paginated = formatted_messages[:limit]
+-    
+-    return {
+-        "messages": paginated,
+-        "has_more": has_more
+-    }
++
++    has_more = len(formatted) > limit
++    return {"messages": formatted[:limit], "has_more": has_more}
++
+ 
+ @router.get("/session/{session_id}")
+-async def get_widget_session(session_id: str, history_token: str, limit: int = 50, x_api_key: str = Header(..., alias="X-API-Key"), db: AsyncSession = Depends(get_db)):
+-    widget_key = x_api_key
+-    stmt = select(Domain).where(Domain.widget_key == widget_key)
++async def get_widget_session(
++    session_id: str,
++    history_token: str,
++    limit: int = 50,
++    x_api_key: str = Header(..., alias="X-API-Key"),
++    db: AsyncSession = Depends(get_db)
++):
++    stmt = select(Domain).where(Domain.widget_key == x_api_key)
+     result = await db.execute(stmt)
+     domain = result.scalar_one_or_none()
+-    
+     if not domain:
+         raise HTTPException(status_code=404, detail="Widget domain not found.")
+-        
+-    stmt_session = select(ChatSession).where(ChatSession.id == session_id).options(selectinload(ChatSession.messages))
+-    res = await db.execute(stmt_session)
++
++    stmt_s = select(ChatSession).where(ChatSession.id == session_id).options(selectinload(ChatSession.messages))
++    res = await db.execute(stmt_s)
+     chat_session = res.scalar_one_or_none()
+-    
++
+     if not chat_session or chat_session.domain_id != domain.id:
+         return {"messages": [], "session_exists": False}
+-        
++
+     chat_session.unread_customer = 0
+     await db.commit()
+-    
+-    messages = chat_session.messages
+-    messages.sort(key=lambda m: m.created_at)
+-    
+-    # widget expects a certain json format
+-    messages_json = []
+-    for m in messages:
+-        sender_type = "customer" if m.sender == "user" else m.sender
+-        messages_json.append({
+-            "sender": sender_type,
++
++    messages = sorted(chat_session.messages, key=lambda m: m.created_at)
++    messages_json = [
++        {
++            "sender": "customer" if m.sender == "user" else m.sender,
+             "text": m.message,
+             "timestamp": m.created_at.isoformat() if m.created_at else ""
+-        })
+-        
++        }
++        for m in messages
++    ]
++
+     return {
+         "messages": messages_json,
+         "session_exists": True,
+@@ -222,6 +214,11 @@ async def get_widget_session(session_id: str, history_token: str, limit: int = 5
+         "unread_customer_count": chat_session.unread_customer
+     }
+ 
++
++# ---------------------------------------------------------------------------
++# Background task
++# ---------------------------------------------------------------------------
++
+ async def run_background_chat_updates(
+     domain_id: str,
+     session_id: str,
+@@ -233,440 +230,465 @@ async def run_background_chat_updates(
+     query_vector: list = None,
+     do_summarize: bool = False
+ ):
+-    """Handles saving AI message, updating session resolution, logging failures, caching, and summarization in background."""
++    """Save AI message, update session, log failures, write caches, summarize."""
+     try:
+         async with AsyncSessionLocal() as db:
+-            # 1. Save AI message if generated
+             if ai_msg:
+-                ai_cm = ChatMessage(session_id=session_id, sender="bot", message=ai_msg)
+-                db.add(ai_cm)
+-                
+-                # Update session state: increment AI message count and last message time
++                db.add(ChatMessage(session_id=session_id, sender="bot", message=ai_msg))
++
+                 stmt = select(ChatSession).where(ChatSession.id == session_id)
+                 res = await db.execute(stmt)
+                 chat_session = res.scalar_one_or_none()
+                 if chat_session:
+-                    chat_session.message_count += 1
++                    chat_session.message_count = (chat_session.message_count or 0) + 1
+                     chat_session.last_message_at = datetime.datetime.utcnow()
+-                    
+-                    # Update resolution type based on outcome
++                    # FIX #5: only set unread_admin when AI responds successfully
++                    if not failure_reason:
++                        chat_session.unread_admin = (chat_session.unread_admin or 0) + 1
++
+                     if failure_reason in ("NO_MATCH", "LOW_CONFIDENCE", "LLM_FAILURE"):
+                         chat_session.resolution_type = "UNRESOLVED"
+-                    elif not failure_reason and ai_msg:
++                    elif not failure_reason:
+                         chat_session.resolution_type = "AI"
+-                    
+-                    # 2. Trigger Summarization if message count reaches a multiple of 20
+-                    if do_summarize or (chat_session.message_count >= 20 and chat_session.message_count % 20 == 0):
+-                        # Fetch all messages in the session ordered by created_at asc
+-                        msg_stmt = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
+-                        msg_res = await db.execute(msg_stmt)
++
++                    should_summarize = do_summarize or (
++                        chat_session.message_count >= 20
++                        and chat_session.message_count % 20 == 0
++                    )
++                    if should_summarize:
++                        msg_res = await db.execute(
++                            select(ChatMessage)
++                            .where(ChatMessage.session_id == session_id)
++                            .order_by(ChatMessage.created_at.asc())
++                        )
+                         all_msgs = msg_res.scalars().all()
+-                        
+-                        # Format messages
+-                        conversation_text = "\n".join([f"{'User' if m.sender == 'user' else 'Assistant'}: {m.message}" for m in all_msgs])
+-                        
++                        convo = "\n".join([
++                            f"{'User' if m.sender == 'user' else 'Assistant'}: {m.message}"
++                            for m in all_msgs
++                        ])
+                         try:
+-                            system_prompt = "You are an AI assistant. Summarize the following conversation history between the user and assistant in a single concise paragraph. Keep it to key facts and details, and keep it under 100 words."
+-                            summary = await ollama_service.generate_response(system_prompt, conversation_text)
++                            summary = await ollama_service.generate_response(
++                                "Summarize the following conversation in one concise paragraph under 100 words. Focus on key facts.",
++                                convo
++                            )
+                             if summary:
+                                 chat_session.summary = summary.strip()
+                         except Exception as sum_err:
+-                            logger.error(f"Failed to generate session summary: {sum_err}")
+-                    
++                            logger.error(f"Summarization failed: {sum_err}")
++
+                     db.add(chat_session)
+ 
+-            # 3. Log Failed Question
+             if failure_reason:
+-                fq = FailedQuestion(
++                db.add(FailedQuestion(
+                     domain_id=domain_id,
+                     question=user_msg,
+                     ai_response=ai_msg,
+                     failure_reason=failure_reason
+-                )
+-                db.add(fq)
+-                
++                ))
++
+             await db.commit()
+-            
++
+     except Exception as db_err:
+-        logger.error(f"Error in background DB chat updates: {db_err}")
++        logger.error(f"Background DB update error: {db_err}")
+ 
+-    # 4. Cache Writes
++    # Cache writes happen outside the DB session
+     try:
+         if cache_key and ai_msg and not failure_reason:
+             await redis_service.set_cached_response(cache_key, {"answer": ai_msg}, 3600)
+         if q_hash and query_vector:
+             await redis_service.set_cached_embedding(q_hash, query_vector)
+     except Exception as cache_err:
+-        logger.error(f"Error in background cache updates: {cache_err}")
++        logger.error(f"Background cache write error: {cache_err}")
++
++
++# ---------------------------------------------------------------------------
++# WebSocket
++# ---------------------------------------------------------------------------
++
++# Pronoun / follow-up words that signal a query needs context rewriting
++_FOLLOWUP_WORDS = {
++    "it", "that", "this", "they", "those", "he", "she", "we",
++    "how", "what", "when", "where", "why", "who",
++    "more", "else", "other", "another"
++}
++
+ 
+ @router.websocket("/ws/chat")
+-async def widget_chat_websocket(websocket: WebSocket, domain_id: str, session_id: str, db: AsyncSession = Depends(get_db)):
++async def widget_chat_websocket(
++    websocket: WebSocket,
++    domain_id: str,
++    session_id: str,
++    db: AsyncSession = Depends(get_db)
++):
+     await websocket.accept()
+-    
+-    # We query domain by id or widget_key. The widget.min.js sends the X-API-Key as domain_id in WS query params
+-    # We allow both widget_key or domain_id just in case
+-    stmt = select(Domain).where((Domain.widget_key == domain_id) | (Domain.id == domain_id))
++
++    # FIX #6: accept both widget_key and domain UUID so the JS client works
++    # regardless of which value it sends as domain_id query param
++    stmt = select(Domain).where(
++        (Domain.widget_key == domain_id) | (Domain.id == domain_id)
++    )
+     result = await db.execute(stmt)
+     domain = result.scalar_one_or_none()
+-    
++
+     if not domain:
+         await websocket.send_json({"type": "error", "text": "Invalid domain"})
+         await websocket.close()
+         return
+ 
+-    # Check or create session
+-    stmt_session = select(ChatSession).where(ChatSession.id == session_id)
+-    res = await db.execute(stmt_session)
+-    chat_session = res.scalar_one_or_none()
+-    
++    # Resolve fallback once per connection (not per message)
++    fallback = (domain.settings or {}).get(
++        "fallback_message",
++        "I don't have enough information to answer that based on the current knowledge base."
++    )
++
++    # Load or create session
++    stmt_s = select(ChatSession).where(ChatSession.id == session_id)
++    res_s = await db.execute(stmt_s)
++    chat_session = res_s.scalar_one_or_none()
+     if not chat_session:
+         chat_session = ChatSession(id=session_id, domain_id=domain.id)
+         db.add(chat_session)
+         await db.commit()
+         await db.refresh(chat_session)
+ 
++    # Fetch and cache category_ids once per connection
++    category_ids = await redis_service.get_domain_categories(domain.id)
++    if category_ids is None:
++        cat_res = await db.execute(
++            select(DomainCategory.category_id).where(DomainCategory.domain_id == domain.id)
++        )
++        category_ids = list(cat_res.scalars().all())
++        asyncio.create_task(redis_service.set_domain_categories(domain.id, category_ids))
++
+     client_ip = websocket.client.host if websocket.client else "unknown"
+ 
++    # Import once
++    from routers.chatbot_routes import search_faqs_fts
++
+     try:
+         while True:
+             data = await websocket.receive_text()
+             try:
+-                payload = json.loads(data)
+-            except:
++                msg_payload = json.loads(data)
++            except Exception:
+                 continue
+-                
+-            if payload.get("type") == "message":
+-                user_msg = payload.get("text", "").strip()
+-                if not user_msg:
+-                    continue
+-                    
+-                # 1. Rate Limiting Check
+-                is_limited = await redis_service.is_rate_limited(
+-                    widget_key=domain.widget_key or domain.id,
+-                    session_id=session_id,
+-                    ip=client_ip,
+-                    limit=100,
+-                    window=60
+-                )
+-                if is_limited:
+-                    await websocket.send_json({"type": "error", "text": "Too many requests. Please wait a moment."})
+-                    continue
+ 
+-                # Re-fetch session to get the latest DB state (for flags like status, ai_enabled, admin_joined)
+-                stmt_s = select(ChatSession).where(ChatSession.id == session_id)
+-                res_s = await db.execute(stmt_s)
+-                chat_session = res_s.scalar_one_or_none()
+-                if not chat_session:
+-                    chat_session = ChatSession(id=session_id, domain_id=domain.id)
+-                    db.add(chat_session)
++            if msg_payload.get("type") != "message":
++                continue
+ 
+-                # 2. Save User Message Immediately
+-                user_cm = ChatMessage(session_id=session_id, sender="user", message=user_msg)
+-                db.add(user_cm)
+-                chat_session.message_count += 1
+-                chat_session.last_message_at = datetime.datetime.utcnow()
+-                await db.commit()
++            user_msg = msg_payload.get("text", "").strip()
++            if not user_msg:
++                continue
+ 
+-                # Check if AI should respond
+-                ai_active = chat_session.status == "open" and chat_session.ai_enabled and not chat_session.admin_joined
+-                if not ai_active:
+-                    continue
++            # ── Rate limiting ──────────────────────────────────────────────
++            if await redis_service.is_rate_limited(
++                widget_key=domain.widget_key or domain.id,
++                session_id=session_id,
++                ip=client_ip,
++                limit=100,
++                window=60
++            ):
++                await websocket.send_json({"type": "error", "text": "Too many requests. Please wait a moment."})
++                continue
+ 
+-                # 3. Send Instant Typing Event
+-                await websocket.send_json({"type": "typing"})
+-
+-                # Get Normalized Question
+-                normalized_q = normalize_query(user_msg)
+-                
+-                resolved_query = normalized_q
+-                
+-                # Retrieve last 6 messages for session memory BEFORE embedding
+-                stmt_mem = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.desc()).limit(6)
+-                res_mem = await db.execute(stmt_mem)
+-                recent_messages = res_mem.scalars().all()
+-                recent_messages.reverse()
+-                
+-                chat_history_for_rewrite = [msg for msg in recent_messages if msg.id != user_cm.id]
+-                
+-                if chat_history_for_rewrite:
+-                    followup_words = ["how", "what", "when", "where", "why", "who", "it", "that", "this", "they", "those", "he", "she"]
+-                    is_short = len(normalized_q.split()) < 6
+-                    has_pronoun = any(word in normalized_q.lower().split() for word in followup_words)
+-                    
+-                    if is_short or has_pronoun:
+-                        try:
+-                            formatted_history = []
++            # ── Re-fetch session state (admin may have toggled ai_enabled) ─
++            res_s2 = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
++            chat_session = res_s2.scalar_one_or_none()
++            if not chat_session:
++                chat_session = ChatSession(id=session_id, domain_id=domain.id)
++                db.add(chat_session)
++
++            # ── Save user message immediately ──────────────────────────────
++            user_cm = ChatMessage(session_id=session_id, sender="user", message=user_msg)
++            db.add(user_cm)
++            chat_session.message_count = (chat_session.message_count or 0) + 1
++            chat_session.last_message_at = datetime.datetime.utcnow()
++            await db.commit()
++
++            ai_active = (
++                chat_session.status == "open"
++                and chat_session.ai_enabled
++                and not chat_session.admin_joined
++            )
++            if not ai_active:
++                continue
++
++            # ── Typing indicator ───────────────────────────────────────────
++            await websocket.send_json({"type": "typing"})
++
++            # ── Normalize query ────────────────────────────────────────────
++            normalized_q = normalize_query(user_msg)
++            resolved_query = normalized_q
++
++            # ── Fetch recent history for context rewriting ─────────────────
++            mem_res = await db.execute(
++                select(ChatMessage)
++                .where(ChatMessage.session_id == session_id)
++                .order_by(ChatMessage.created_at.desc())
++                .limit(8)
++            )
++            recent_messages = list(reversed(mem_res.scalars().all()))
++            # Exclude the message we just saved
++            history_msgs = [m for m in recent_messages if m.id != user_cm.id]
++
++            # ── FIX #7: context-aware query rewriting ──────────────────────
++            # Only rewrite when query is short or contains pronouns/follow-ups.
++            # Only use successful prior exchanges (skip fallback responses).
++            if history_msgs:
++                words = set(normalized_q.lower().split())
++                is_short = len(words) < 6
++                has_followup = bool(words & _FOLLOWUP_WORDS)
++
++                if is_short or has_followup:
++                    good_pairs = []
++                    current_pair: dict = {}
++                    for m in history_msgs:
++                        if m.sender == "user":
++                            current_pair = {"user": m.message}
++                        elif m.sender == "bot" and "user" in current_pair:
++                            ai_text = m.message
++                            # Skip fallback turns — they add noise not signal
++                            if (
++                                "don't have enough information" not in ai_text.lower()
++                                and fallback.lower() not in ai_text.lower()
++                            ):
++                                current_pair["ai"] = ai_text
++                                good_pairs.append(current_pair)
+                             current_pair = {}
+-                            for msg in chat_history_for_rewrite:
+-                                if msg.sender == "user":
+-                                    current_pair["user"] = msg.message
+-                                elif msg.sender == "bot" and "user" in current_pair:
+-                                    current_pair["ai"] = msg.message
+-                                    if "don't have enough information" not in msg.message.lower() and "fallback" not in msg.message.lower():
+-                                        formatted_history.append(current_pair)
+-                                    current_pair = {}
+-                            
+-                            if formatted_history:
+-                                resolved_query = await ollama_service.rewrite_query(formatted_history, normalized_q)
+-                        except Exception as e:
+-                            logger.error(f"Query rewrite failed: {e}")
++
++                    if good_pairs:
++                        try:
++                            resolved_query = await ollama_service.rewrite_query(good_pairs, normalized_q)
++                            logger.info(f"Query rewrite: '{normalized_q}' → '{resolved_query}'")
++                        except Exception as rw_err:
++                            logger.error(f"Query rewrite failed: {rw_err}")
+                             resolved_query = normalized_q
+ 
+-                q_hash = hashlib.md5(resolved_query.encode()).hexdigest()
+-                cache_key = f"chat:{domain.id}:{q_hash}"
++            # ── Cache key uses resolved query ──────────────────────────────
++            q_hash = hashlib.md5(resolved_query.encode()).hexdigest()
++            cache_key = f"chat:{domain.id}:{q_hash}"
++
++            # ── Answer cache (exact match) ──────────────────────────────────
++            cached_response = await redis_service.get_cached_response(cache_key)
++            if cached_response:
++                cached_answer = cached_response.get("answer", "")
++                await websocket.send_json({
++                    "type": "message",
++                    "text": cached_answer,
++                    "sender": "ai",
++                    "source": "cache",
++                    "confidence": 1.0
++                })
++                asyncio.create_task(run_background_chat_updates(
++                    domain_id=domain.id,
++                    session_id=session_id,
++                    user_msg=user_msg,
++                    ai_msg=cached_answer
++                ))
++                continue
+ 
+-                # 4. Answer Cache Check (Exact match)
+-                cached_response = await redis_service.get_cached_response(cache_key)
+-                if cached_response:
+-                    cached_answer = cached_response.get("answer")
+-                    await websocket.send_json({
+-                        "type": "message",
+-                        "text": cached_answer,
+-                        "sender": "ai",
+-                        "source": "faq",
+-                        "confidence": 1.0
+-                    })
+-                    # Log bot message saving in the background
+-                    asyncio.create_task(run_background_chat_updates(
+-                        domain_id=domain.id,
+-                        session_id=session_id,
+-                        user_msg=user_msg,
+-                        ai_msg=cached_answer,
+-                        do_summarize=False
+-                    ))
++            # ── Embedding cache ────────────────────────────────────────────
++            query_vector = await redis_service.get_cached_embedding(q_hash)
++            need_cache_embedding = False
++            if not query_vector:
++                try:
++                    query_vector = await ollama_service.generate_embedding(resolved_query)
++                    need_cache_embedding = True
++                except Exception as embed_err:
++                    logger.error(f"Embedding error: {embed_err}")
++                    await websocket.send_json({"type": "error", "text": "Failed to process query."})
+                     continue
+ 
+-                # 5. Embedding Cache Check
+-                query_vector = await redis_service.get_cached_embedding(q_hash)
+-                need_cache_embedding = False
+-                if not query_vector:
+-                    try:
+-                        query_vector = await ollama_service.generate_embedding(resolved_query)
+-                        need_cache_embedding = True
+-                    except Exception as embed_err:
+-                        logger.error(f"Embedding generation error: {embed_err}")
+-                        await websocket.send_json({"type": "error", "text": "Failed to process query embeddings."})
+-                        continue
+-
+-                # 6. Fetch Domain Categories (Try cache first)
+-                category_ids = await redis_service.get_domain_categories(domain.id)
+-                if category_ids is None:
+-                    try:
+-                        from database.models import DomainCategory
+-                        cat_stmt = select(DomainCategory.category_id).where(DomainCategory.domain_id == domain.id)
+-                        cat_res = await db.execute(cat_stmt)
+-                        category_ids = cat_res.scalars().all()
+-                        asyncio.create_task(redis_service.set_domain_categories(domain.id, category_ids))
+-                    except Exception as cat_err:
+-                        logger.error(f"Failed to fetch categories: {cat_err}")
+-                        category_ids = []
+-
+-                # 7. Search Qdrant and Postgres FTS
+-                from routers.chatbot_routes import search_faqs_fts
+-                
+-                async def run_qdrant():
+-                    try:
+-                        return await qdrant_service.search_chunks(
+-                            tenant_id=domain.organization_id,
+-                            query_vector=query_vector,
+-                            category_ids=category_ids,
+-                            limit=3
+-                        )
+-                    except Exception as search_err:
+-                        logger.error(f"Qdrant search error: {search_err}")
+-                        return []
+-                        
+-                qdrant_chunks, fts_chunks = await asyncio.gather(
+-                    run_qdrant(),
+-                    search_faqs_fts(db, domain.id, resolved_query, limit=3)
+-                )
+-
+-                # Merge and deduplicate
+-                seen_texts = set()
+-                top_chunks = []
+-                
+-                for chunk in fts_chunks + qdrant_chunks:
+-                    payload = chunk.get("payload", {})
+-                    text_content = payload.get("question") or payload.get("text", "")
+-                    short_key = text_content[:100].lower()
+-                    if short_key not in seen_texts:
+-                        seen_texts.add(short_key)
+-                        top_chunks.append(chunk)
+-                        
+-                top_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
+-                top_chunks = top_chunks[:5]
+-
+-                fallback = domain.settings.get("fallback_message", "I don't have enough information to answer that based on the current knowledge base.") if domain.settings else "I don't have enough information to answer that based on the current knowledge base."
+-
+-                if not top_chunks:
+-                    logger.info({
+-                        "question": user_msg,
+-                        "score": 0.0,
+-                        "matched_question": None,
+-                        "matched_category": category_ids,
+-                        "path": "NO_MATCH"
+-                    })
+-                    # Early Exit: No match
+-                    await websocket.send_json({
+-                        "type": "message",
+-                        "text": fallback,
+-                        "sender": "ai",
+-                        "source": "fallback",
+-                        "confidence": 0.0
+-                    })
+-                    asyncio.create_task(run_background_chat_updates(
+-                        domain_id=domain.id,
+-                        session_id=session_id,
+-                        user_msg=user_msg,
+-                        ai_msg=fallback,
+-                        failure_reason="NO_MATCH",
+-                        q_hash=q_hash if need_cache_embedding else None,
+-                        query_vector=query_vector if need_cache_embedding else None
+-                    ))
+-                    continue
++            # ── FIX #8: parallel Qdrant + FTS search ───────────────────────
++            async def _qdrant():
++                try:
++                    return await qdrant_service.search_chunks(
++                        tenant_id=domain.organization_id,
++                        query_vector=query_vector,
++                        category_ids=category_ids,
++                        limit=3
++                    )
++                except Exception as e:
++                    logger.error(f"Qdrant search error: {e}")
++                    return []
++
++            qdrant_chunks, fts_chunks = await asyncio.gather(
++                _qdrant(),
++                search_faqs_fts(db, domain.id, resolved_query, limit=3)
++            )
++
++            # Merge: FTS first (exact keyword wins), then semantic
++            seen = set()
++            top_chunks = []
++            for chunk in fts_chunks + qdrant_chunks:
++                p = chunk.get("payload", {})
++                key = (p.get("question") or p.get("text", ""))[:100].lower()
++                if key not in seen:
++                    seen.add(key)
++                    top_chunks.append(chunk)
++
++            top_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
++            top_chunks = top_chunks[:5]
++
++            # ── No match ───────────────────────────────────────────────────
++            if not top_chunks:
++                logger.info({"event": "NO_MATCH", "question": user_msg, "resolved": resolved_query})
++                await websocket.send_json({
++                    "type": "message",
++                    "text": fallback,
++                    "sender": "ai",
++                    "source": "fallback",
++                    "confidence": 0.0
++                })
++                asyncio.create_task(run_background_chat_updates(
++                    domain_id=domain.id,
++                    session_id=session_id,
++                    user_msg=user_msg,
++                    ai_msg=fallback,
++                    failure_reason="NO_MATCH",
++                    q_hash=q_hash if need_cache_embedding else None,
++                    query_vector=query_vector if need_cache_embedding else None
++                ))
++                continue
++
++            max_score = top_chunks[0].get("score", 0)
+ 
+-                # Score Check
+-                max_score = top_chunks[0].get("score", 0)
+-
+-                # 8. Score Check: FAQ Fast Path (>= 0.95)
+-                if max_score >= 0.95:
+-                    fast_answer = top_chunks[0].get("payload", {}).get("answer")
+-                    if fast_answer:
+-                        logger.info({
+-                            "question": user_msg,
+-                            "score": max_score,
+-                            "matched_question": top_chunks[0].get("payload", {}).get("question"),
+-                            "matched_category": category_ids,
+-                            "path": "FAST_PATH"
+-                        })
+-                        await websocket.send_json({
+-                            "type": "message",
+-                            "text": fast_answer,
+-                            "sender": "ai",
+-                            "source": "faq",
+-                            "confidence": max_score
+-                        })
+-                        asyncio.create_task(run_background_chat_updates(
+-                            domain_id=domain.id,
+-                            session_id=session_id,
+-                            user_msg=user_msg,
+-                            ai_msg=fast_answer,
+-                            cache_key=cache_key,
+-                            q_hash=q_hash if need_cache_embedding else None,
+-                            query_vector=query_vector if need_cache_embedding else None
+-                        ))
+-                        continue
+-
+-                # 9. Score Check: Early Exit Fallback (< 0.60)
+-                if max_score < 0.60:
++            # ── Fast path ≥ 0.95 ───────────────────────────────────────────
++            if max_score >= 0.95:
++                fast_answer = top_chunks[0].get("payload", {}).get("answer")
++                if fast_answer:
+                     logger.info({
++                        "event": "FAST_PATH",
+                         "question": user_msg,
++                        "resolved": resolved_query,
+                         "score": max_score,
+-                        "matched_question": top_chunks[0].get("payload", {}).get("question"),
+-                        "matched_category": category_ids,
+-                        "path": "FALLBACK"
++                        "matched": top_chunks[0].get("payload", {}).get("question")
+                     })
+                     await websocket.send_json({
+                         "type": "message",
+-                        "text": fallback,
++                        "text": fast_answer,
+                         "sender": "ai",
+-                        "source": "fallback",
++                        "source": "faq",
+                         "confidence": max_score
+                     })
+                     asyncio.create_task(run_background_chat_updates(
+                         domain_id=domain.id,
+                         session_id=session_id,
+                         user_msg=user_msg,
+-                        ai_msg=fallback,
+-                        failure_reason="LOW_CONFIDENCE",
++                        ai_msg=fast_answer,
++                        cache_key=cache_key,
+                         q_hash=q_hash if need_cache_embedding else None,
+                         query_vector=query_vector if need_cache_embedding else None
+                     ))
+                     continue
+ 
+-                # 10. Normal RAG Path (0.60 - 0.95): Build Context with Memory and Stream Response
+-                # Retrieve last 5 messages for session memory
+-                stmt_mem = select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.desc()).limit(5)
+-                res_mem = await db.execute(stmt_mem)
+-                recent_messages = res_mem.scalars().all()
+-                recent_messages.reverse()
+-
+-                prompt_parts = []
+-                if chat_session.summary:
+-                    prompt_parts.append(f"Summary of previous conversation:\n{chat_session.summary}")
+-                
+-                if recent_messages:
+-                    history_text = "\n".join([f"{'User' if m.sender == 'user' else 'Assistant' if m.sender == 'bot' else m.sender}: {m.message}" for m in recent_messages])
+-                    prompt_parts.append(f"Recent Conversation History:\n{history_text}")
+-                    
+-                context_parts_list = []
+-                for chunk in top_chunks:
+-                    payload = chunk.get("payload", {})
+-                    if "answer" in payload:
+-                        context_parts_list.append(payload["answer"])
+-                    else:
+-                        text = payload.get("text", "")
+-                        if text.startswith("Q:"):
+-                            text = text.replace("Q:", "").replace("A:", "").strip()
+-                        context_parts_list.append(text)
+-                
+-                context_text = "\n\n".join(context_parts_list)
+-                prompt_parts.append(f"Context from Knowledge Base:\n{context_text}")
+-                
+-                prompt_history_context = "\n\n".join(prompt_parts)
+-                system_prompt = f"""You are a helpful and precise AI assistant for the website {domain.domain_name}.
+-You must answer the user's question relying ONLY on the provided Context.
+-You may correct minor spelling mistakes in the user's question to match the Context.
+-If the provided Context does not contain the information needed to answer the user's question, you must reply EXACTLY with the following string and nothing else: "{fallback}"
+-Do not guess, do not provide external knowledge, do not hallucinate, and do not provide any explanations if the context is insufficient.
+-
+-{prompt_history_context}"""
+-
+-                # 11. Stream Tokens
+-                full_answer = ""
+-                try:
+-                    async for chunk_text in ollama_service.generate_response_stream(
+-                        system_prompt=system_prompt,
+-                        user_query=user_msg
+-                    ):
+-                        if chunk_text:
+-                            full_answer += chunk_text
+-                            await websocket.send_json({"type": "stream_delta", "text": chunk_text})
+-                    
+-                    # Stream Done
+-                    await websocket.send_json({"type": "stream_done"})
+-
+-                    # Check if response is a fallback/failure
+-                    failure_reason = None
+-                    path_type = "LLM_PATH"
+-                    if fallback.lower() in full_answer.lower() or "i don't have enough information" in full_answer.lower():
+-                        failure_reason = "LLM_FAILURE"
+-                        path_type = "LLM_FAILURE"
+-
+-                    logger.info({
+-                        "question": user_msg,
+-                        "score": max_score,
+-                        "matched_question": top_chunks[0].get("payload", {}).get("question"),
+-                        "matched_category": category_ids,
+-                        "path": path_type
+-                    })
++            # ── Early exit < 0.60 ──────────────────────────────────────────
++            if max_score < 0.60:
++                logger.info({
++                    "event": "LOW_CONFIDENCE",
++                    "question": user_msg,
++                    "resolved": resolved_query,
++                    "score": max_score
++                })
++                await websocket.send_json({
++                    "type": "message",
++                    "text": fallback,
++                    "sender": "ai",
++                    "source": "fallback",
++                    "confidence": max_score
++                })
++                asyncio.create_task(run_background_chat_updates(
++                    domain_id=domain.id,
++                    session_id=session_id,
++                    user_msg=user_msg,
++                    ai_msg=fallback,
++                    failure_reason="LOW_CONFIDENCE",
++                    q_hash=q_hash if need_cache_embedding else None,
++                    query_vector=query_vector if need_cache_embedding else None
++                ))
++                continue
+ 
+-                    # Schedule background task to log message and cache response
+-                    asyncio.create_task(run_background_chat_updates(
+-                        domain_id=domain.id,
+-                        session_id=session_id,
+-                        user_msg=user_msg,
+-                        ai_msg=full_answer,
+-                        failure_reason=failure_reason,
+-                        cache_key=cache_key,
+-                        q_hash=q_hash if need_cache_embedding else None,
+-                        query_vector=query_vector if need_cache_embedding else None
+-                    ))
++            # ── LLM RAG path (0.60 – 0.95) ────────────────────────────────
++
++            # FIX #9: build context from answer field, not raw Q:A text blob
++            context_parts = []
++            for chunk in top_chunks:
++                p = chunk.get("payload", {})
++                if "answer" in p:
++                    # Use structured Q+A for richest context
++                    context_parts.append(f"Q: {p.get('question', '')}\nA: {p['answer']}")
++                else:
++                    text = p.get("text", "")
++                    context_parts.append(text)
++            context_text = "\n\n".join(context_parts)
++
++            # Build prompt with summary + recent history
++            prompt_parts = []
++            if chat_session.summary:
++                prompt_parts.append(f"Conversation summary so far:\n{chat_session.summary}")
++
++            if history_msgs:
++                hist_lines = []
++                for m in history_msgs[-6:]:  # last 3 turns = 6 messages
++                    role = "User" if m.sender == "user" else "Assistant"
++                    hist_lines.append(f"{role}: {m.message}")
++                prompt_parts.append("Recent conversation:\n" + "\n".join(hist_lines))
++
++            prompt_parts.append(f"Knowledge base:\n{context_text}")
++            prompt_context = "\n\n".join(prompt_parts)
++
++            system_prompt = (
++                f"You are a helpful AI assistant for {domain.domain_name}.\n"
++                f"Answer using ONLY the information in the Knowledge base below.\n"
++                f"You may fix obvious spelling mistakes in the user's question.\n"
++                f"If the Knowledge base does not contain the answer, reply EXACTLY with:\n"
++                f"\"{fallback}\"\n"
++                f"Do not guess or use outside knowledge.\n\n"
++                f"{prompt_context}"
++            )
++
++            # ── Stream tokens ──────────────────────────────────────────────
++            full_answer = ""
++            try:
++                async for token in ollama_service.generate_response_stream(
++                    system_prompt=system_prompt,
++                    user_query=user_msg
++                ):
++                    if token:
++                        full_answer += token
++                        await websocket.send_json({"type": "stream_delta", "text": token})
++
++                await websocket.send_json({"type": "stream_done"})
++
++                failure_reason = None
++                if (
++                    fallback.lower() in full_answer.lower()
++                    or "i don't have enough information" in full_answer.lower()
++                ):
++                    failure_reason = "LLM_FAILURE"
++
++                logger.info({
++                    "event": failure_reason or "LLM_PATH",
++                    "question": user_msg,
++                    "resolved": resolved_query,
++                    "score": max_score,
++                    "matched": top_chunks[0].get("payload", {}).get("question")
++                })
+ 
+-                except Exception as stream_err:
+-                    logger.error(f"Error during Ollama token streaming: {stream_err}")
+-                    await websocket.send_json({"type": "error", "text": "Error generating response from AI server."})
+-                    continue
++                asyncio.create_task(run_background_chat_updates(
++                    domain_id=domain.id,
++                    session_id=session_id,
++                    user_msg=user_msg,
++                    ai_msg=full_answer,
++                    failure_reason=failure_reason,
++                    cache_key=cache_key if not failure_reason else None,
++                    q_hash=q_hash if need_cache_embedding else None,
++                    query_vector=query_vector if need_cache_embedding else None
++                ))
++
++            except Exception as stream_err:
++                logger.error(f"Ollama streaming error: {stream_err}")
++                await websocket.send_json({"type": "error", "text": "AI response error. Please try again."})
+ 
+     except WebSocketDisconnect:
+-        logger.info(f"Widget WS disconnected for session {session_id}")
++        logger.info(f"WS disconnected: session={session_id}")
+diff --git a/backend/scripts/backfill_qdrant.py b/backend/scripts/backfill_qdrant.py
+index fb91be1..31a9430 100644
+--- a/backend/scripts/backfill_qdrant.py
++++ b/backend/scripts/backfill_qdrant.py
+@@ -1,9 +1,17 @@
++"""
++Backfill script — re-indexes all active FAQ questions into Qdrant.
++Run this once after deploying the fix that changes embedding text from
++question-only to Q+A combined text.
++
++Usage:
++    cd backend
++    python scripts/backfill_qdrant.py
++"""
+ import asyncio
+ import os
+ import sys
+ 
+-# Add backend directory to sys.path
+-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
++sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+ 
+ from database.database import AsyncSessionLocal
+ from database.models import FAQQuestion, FAQCategory
+@@ -11,44 +19,55 @@ from sqlalchemy.future import select
+ from services.ollama_service import ollama_service
+ from services.qdrant_service import qdrant_service
+ 
++
+ async def main():
+-    print("Starting Qdrant backfill...")
++    print("Starting Qdrant backfill (Q+A combined embedding)...")
++    await qdrant_service.ensure_collection()
++
+     async with AsyncSessionLocal() as db:
+-        # Fetch all active questions along with their categories to get the organization_id
+-        stmt = select(FAQQuestion, FAQCategory.organization_id).join(
+-            FAQCategory, FAQQuestion.faq_id == FAQCategory.id
+-        ).where(FAQQuestion.status == 'active')
+-        
++        stmt = (
++            select(FAQQuestion, FAQCategory.organization_id)
++            .join(FAQCategory, FAQQuestion.faq_id == FAQCategory.id)
++            .where(FAQQuestion.status == "active")
++        )
+         result = await db.execute(stmt)
+         records = result.all()
+-        
+-        print(f"Found {len(records)} active FAQ questions to backfill.")
+-        
+-        for q, org_id in records:
+-            print(f"Embedding question {q.id}...")
+-            try:
+-                text_to_embed = q.question
+-                full_text = f"Q: {q.question}\nA: {q.answer}"
+-                vector = await ollama_service.generate_embedding(text_to_embed)
+-                # Pass q.faq_id as domain_id as per the fix in faq_question_routes.py
+-                await qdrant_service.add_chunk(
+-                    tenant_id=org_id,
+-                    domain_id=q.faq_id, 
+-                    text=full_text,
+-                    vector=vector,
+-                    metadata={
+-                        "category_id": q.faq_id, 
+-                        "question_id": q.id, 
+-                        "type": "faq", 
+-                        "question": q.question, 
+-                        "answer": q.answer
+-                    }
+-                )
+-                print(f"Successfully re-indexed question {q.id}.")
+-            except Exception as e:
+-                print(f"Failed to re-index question {q.id}: {e}")
+-                
+-    print("Backfill complete.")
++
++    print(f"Found {len(records)} active questions.")
++
++    ok = 0
++    fail = 0
++    for q, org_id in records:
++        try:
++            # FIX: delete stale points before re-inserting
++            await qdrant_service.delete_chunks_by_question_id(q.id)
++
++            # FIX: embed Q+A together
++            text_to_embed = f"Q: {q.question}\nA: {q.answer}"
++            vector = await ollama_service.generate_embedding(text_to_embed)
++
++            await qdrant_service.add_chunk(
++                tenant_id=org_id,
++                domain_id=q.faq_id,
++                text=text_to_embed,
++                vector=vector,
++                metadata={
++                    "category_id": q.faq_id,
++                    "question_id": q.id,
++                    "type": "faq",
++                    "question": q.question,
++                    "answer": q.answer,
++                    "aliases": q.aliases or []
++                }
++            )
++            print(f"  ✓ [{org_id[:8]}] {q.question[:60]}")
++            ok += 1
++        except Exception as e:
++            print(f"  ✗ [{q.id}] {q.question[:40]} — {e}")
++            fail += 1
++
++    print(f"\nDone. {ok} indexed, {fail} failed.")
++
+ 
+ if __name__ == "__main__":
+     asyncio.run(main())
+diff --git a/backend/services/qdrant_service.py b/backend/services/qdrant_service.py
+index a08e225..2e20348 100644
+--- a/backend/services/qdrant_service.py
++++ b/backend/services/qdrant_service.py
+@@ -1,17 +1,22 @@
+ from qdrant_client import AsyncQdrantClient
+-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, MatchAny, HnswConfigDiff, PayloadSchemaType, SearchParams
++from qdrant_client.models import (
++    Distance, VectorParams, PointStruct, Filter,
++    FieldCondition, MatchValue, MatchAny,
++    HnswConfigDiff, PayloadSchemaType, SearchParams,
++    FilterSelector
++)
+ from core.config import settings
+ import uuid
+ 
++
+ class QdrantService:
+     def __init__(self):
+         self.client = AsyncQdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
+         self.collection_name = "knowledge_chunks"
+-        # nomic-embed-text dimension is 768. Update if using a different model.
+-        self.vector_size = 768 
++        self.vector_size = 768  # nomic-embed-text
+ 
+     async def ensure_collection(self):
+-        """Ensure the single knowledge_chunks collection exists."""
++        """Ensure the knowledge_chunks collection exists with all payload indexes."""
+         collections = await self.client.get_collections()
+         exists = any(c.name == self.collection_name for c in collections.collections)
+         if not exists:
+@@ -20,50 +25,84 @@ class QdrantService:
+                 vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                 hnsw_config=HnswConfigDiff(m=16, ef_construct=200)
+             )
+-            
+-            # Create payload indexes for fast filtering
+-            payload_indexes = ["tenant_id", "category_id", "domain_id", "question_id"]
+-            for field in payload_indexes:
++            for field in ["tenant_id", "category_id", "domain_id", "question_id"]:
+                 await self.client.create_payload_index(
+                     collection_name=self.collection_name,
+                     field_name=field,
+                     field_schema=PayloadSchemaType.KEYWORD
+                 )
+ 
+-    async def add_chunk(self, tenant_id: str, domain_id: str, text: str, vector: list[float], metadata: dict = None):
+-        """Add a knowledge chunk with strict tenant and domain metadata."""
++    async def add_chunk(
++        self,
++        tenant_id: str,
++        domain_id: str,
++        text: str,
++        vector: list[float],
++        metadata: dict = None
++    ) -> str:
+         if metadata is None:
+             metadata = {}
+-        
+         payload = {
+             "tenant_id": tenant_id,
+             "domain_id": domain_id,
+             "text": text,
+             **metadata
+         }
+-        
+         point_id = str(uuid.uuid4())
+         await self.client.upsert(
+             collection_name=self.collection_name,
+-            points=[
+-                PointStruct(id=point_id, vector=vector, payload=payload)
+-            ]
++            points=[PointStruct(id=point_id, vector=vector, payload=payload)]
+         )
+         return point_id
+ 
+-    async def search_chunks(self, tenant_id: str, query_vector: list[float], category_ids: list[str] = None, domain_id: str = None, limit: int = 5):
+-        """Search chunks with tenant isolation."""
++    async def delete_chunks_by_question_id(self, question_id: str):
++        """
++        FIX #2 — Delete all Qdrant points for a given question_id.
++        Previously, update/delete left stale vectors; search would return
++        old answers or ghost matches degrading score accuracy.
++        """
++        await self.client.delete(
++            collection_name=self.collection_name,
++            points_selector=FilterSelector(
++                filter=Filter(
++                    must=[FieldCondition(key="question_id", match=MatchValue(value=question_id))]
++                )
++            )
++        )
++
++    async def search_chunks(
++        self,
++        tenant_id: str,
++        query_vector: list[float],
++        category_ids: list[str] = None,
++        domain_id: str = None,
++        limit: int = 5
++    ) -> list[dict]:
++        """
++        FIX #3 — Search with tenant isolation + category scoping.
++        When category_ids is empty AND domain_id is not set, fall through to
++        tenant-only search so questions are always findable even without
++        domain→category assignments.
++        """
+         must_filters = [
+             FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
+         ]
+-        
++
+         if category_ids:
+-            must_filters.append(FieldCondition(key="category_id", match=MatchAny(any=category_ids)))
++            # Preferred path: scope to assigned categories
++            must_filters.append(
++                FieldCondition(key="category_id", match=MatchAny(any=list(category_ids)))
++            )
+         elif domain_id and domain_id.strip():
+-            must_filters.append(FieldCondition(key="domain_id", match=MatchValue(value=domain_id)))
+-            
++            # Fallback: scope to domain
++            must_filters.append(
++                FieldCondition(key="domain_id", match=MatchValue(value=domain_id))
++            )
++        # else: tenant-only — searches all of this tenant's knowledge base
++        # This ensures questions are returned even when domain_categories is empty
++
+         search_filter = Filter(must=must_filters)
+-        
++
+         results = await self.client.search(
+             collection_name=self.collection_name,
+             query_vector=query_vector,
+@@ -73,4 +112,5 @@ class QdrantService:
+         )
+         return [{"payload": hit.payload, "score": hit.score} for hit in results]
+ 
++
+ qdrant_service = QdrantService()
+diff --git a/backend/utils/nlp_utils.py b/backend/utils/nlp_utils.py
+index d732f50..6aad4b8 100644
+--- a/backend/utils/nlp_utils.py
++++ b/backend/utils/nlp_utils.py
+@@ -8,21 +8,41 @@ SHORTHAND_MAP = {
+     r"\bpls\b": "please",
+     r"\bplz\b": "please",
+     r"\bthx\b": "thanks",
+-    r"\bthk\b": "thank"
++    r"\bthk\b": "thank",
++    r"\bcldnt\b": "could not",
++    r"\bwldnt\b": "would not",
++    r"\bdnt\b": "do not",
++    r"\bdont\b": "do not",
++    r"\bim\b": "i am",
++    r"\bive\b": "i have",
++    r"\bhw\b": "how",
++    r"\bwhr\b": "where",
++    r"\bwhn\b": "when",
++    r"\bwhy\b": "why",
++    r"\bsmth\b": "something",
++    r"\bsth\b": "something",
++    r"\bbtw\b": "by the way",
++    r"\bfyi\b": "for your information",
++    r"\basap\b": "as soon as possible",
+ }
+ 
+ def normalize_query(query: str) -> str:
++    """Normalize casual user input into clean, searchable text."""
+     # 1. Lowercase
+-    q = query.lower()
+-    
++    q = query.lower().strip()
++
+     # 2. Replace shorthands using word boundaries
+     for pattern, replacement in SHORTHAND_MAP.items():
+         q = re.sub(pattern, replacement, q)
+-        
++
+     # 3. Remove duplicate punctuation
+     q = re.sub(r'([.!?])\1+', r'\1', q)
+-    
+-    # 4. Remove extra spaces
++
++    # 4. Remove trailing question marks / punctuation that add no semantic value
++    # (keep one if present)
++    q = re.sub(r'[?!.]{2,}$', '?', q)
++
++    # 5. Remove extra spaces
+     q = re.sub(r'\s+', ' ', q).strip()
+-    
++
+     return q
