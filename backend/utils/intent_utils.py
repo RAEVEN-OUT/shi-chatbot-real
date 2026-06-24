@@ -2,7 +2,7 @@ import re
 
 GENERIC_INTENTS = {
     "greeting": [
-        "hi", "hello", "hey", "good morning", "good evening", "good afternoon", "howdy", "hiya"
+        "hi", "hello","hola", "hey", "good morning", "good evening", "good afternoon", "howdy", "hiya"
     ],
     "goodbye": [
         "bye", "goodbye", "see you", "cya", "farewell", "talk to you later"

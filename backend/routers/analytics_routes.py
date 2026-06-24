@@ -78,6 +78,15 @@ async def get_analytics_summary(
     total_leads = await db.scalar(lead_stmt) or 0
     
     return {
+        "totalQueries": total_queries,
+        "faqResolved": human_resolved,
+        "aiResolved": ai_resolved,
+        "failedQsCount": failed_questions,
+        "spamCount": int(spam_count),
+        "totalLeads": total_leads,
+        "utmSourceCounts": {},
+        "utmMediumCounts": {},
+        # Retain snake_case for backward compatibility
         "total_queries": total_queries,
         "ai_resolved": ai_resolved,
         "human_resolved": human_resolved,

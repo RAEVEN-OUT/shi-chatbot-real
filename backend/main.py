@@ -19,7 +19,7 @@ app.add_middleware(
 from routers import (
     auth_routes, chatbot_routes, faq_routes, domain_routes, chat_session_routes,
     failed_question_routes, widget_routes, faq_category_routes, faq_question_routes,
-    leads_routes, analytics_routes, settings_routes
+    leads_routes, analytics_routes, settings_routes, faq_bulk_routes, audit_routes
 )
 from fastapi.staticfiles import StaticFiles
 import os
@@ -30,6 +30,7 @@ app.include_router(faq_routes.router)
 app.include_router(domain_routes.router)
 app.include_router(chat_session_routes.router)
 app.include_router(chat_session_routes.notifications_router)
+app.include_router(chat_session_routes.admin_ws_router)
 app.include_router(failed_question_routes.router)
 app.include_router(failed_question_routes.spam_router)
 app.include_router(widget_routes.router)
@@ -40,6 +41,8 @@ app.include_router(faq_question_routes.router)
 app.include_router(leads_routes.router)
 app.include_router(analytics_routes.router)
 app.include_router(settings_routes.router)
+app.include_router(faq_bulk_routes.router)
+app.include_router(audit_routes.router)
 
 public_dir = os.path.join(os.path.dirname(__file__), "public")
 if os.path.exists(public_dir):

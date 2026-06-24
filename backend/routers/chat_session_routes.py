@@ -1,17 +1,23 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import update
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from pydantic import BaseModel
-from datetime import datetime
+import datetime
+import json
+from fastapi import WebSocket, WebSocketDisconnect
 
 from core.firebase_auth import get_current_user, require_subscriber
 from database.database import get_db
 from database.models import ChatSession, ChatMessage, Domain
+from utils.ws_manager import manager
+from services.redis_service import redis_service
 
 router = APIRouter(prefix="/chat-sessions", tags=["chat_sessions"])
 notifications_router = APIRouter(prefix="/notifications", tags=["notifications"])
+admin_ws_router = APIRouter(prefix="/api/ws/admin", tags=["admin_ws"])
 
 class MessageCreate(BaseModel):
     message: str
@@ -31,15 +37,42 @@ async def list_sessions(
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
+    # Auto-close sessions inactive for 1 hour
+    cutoff_time = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
+    await db.execute(
+        update(ChatSession)
+        .where(ChatSession.status.in_(["open", "active"]))
+        .where(ChatSession.last_message_at < cutoff_time)
+        .values(status="closed", ai_enabled=False)
+    )
+    await db.commit()
+
+    # Correlated subquery to fetch only the text of the latest message for each session
+    latest_msg_sub = (
+        select(ChatMessage.message)
+        .where(ChatMessage.session_id == ChatSession.id)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+        .limit(1)
+        .correlate(ChatSession)
+        .scalar_subquery()
+    )
+
     # Get all domains user has access to
     if user["role"] == "admin":
-        stmt = select(ChatSession).options(selectinload(ChatSession.domain))
+        stmt = select(ChatSession, latest_msg_sub.label("last_message")).options(
+            selectinload(ChatSession.domain)
+        )
     else:
         # Join with domain to filter by org
-        stmt = select(ChatSession).join(Domain).where(Domain.organization_id == user["postgres_user"].organization_id).options(selectinload(ChatSession.domain))
+        stmt = (
+            select(ChatSession, latest_msg_sub.label("last_message"))
+            .join(Domain)
+            .where(Domain.organization_id == user["postgres_user"].organization_id)
+            .options(selectinload(ChatSession.domain))
+        )
         
     result = await db.execute(stmt)
-    sessions = result.scalars().all()
+    sessions_data = result.all()
     
     return [
         {
@@ -52,10 +85,11 @@ async def list_sessions(
             "admin_joined": s.admin_joined,
             "unread_admin": s.unread_admin,
             "message_count": s.message_count,
+            "last_message": last_msg,
             "last_message_at": s.last_message_at,
             "created_at": s.created_at
         }
-        for s in sessions
+        for s, last_msg in sessions_data
     ]
 
 @router.get("/{session_id}")
@@ -78,6 +112,11 @@ async def get_session(
         domain = d_result.scalar_one_or_none()
         if not domain or domain.organization_id != user["postgres_user"].organization_id:
             raise HTTPException(status_code=403, detail="Access denied")
+            
+    # Auto-clear notifications when admin opens the chat
+    if session.unread_admin and session.unread_admin > 0:
+        session.unread_admin = 0
+        await db.commit()
             
     return {
         "id": session.id,
@@ -131,7 +170,33 @@ async def send_message(
         session.unread_customer += 1
         
     await db.commit()
+    
+    # Publish to Redis
+    payload = {
+        "type": "message",
+        "message": {
+            "id": msg.id,
+            "session_id": session_id,
+            "sender": msg.sender,
+            "message": msg.message,
+            "type": msg.type,
+            "created_at": msg.created_at.isoformat() if msg.created_at else datetime.datetime.utcnow().isoformat()
+        }
+    }
+    await redis_service.publish_message(f"chat:{session_id}", payload)
+    
     return {"status": "success", "message_id": msg.id}
+
+@admin_ws_router.websocket("/chat/{session_id}")
+async def admin_chat_websocket(websocket: WebSocket, session_id: str):
+    await manager.connect(websocket, session_id, role="admin")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # If the admin frontend sends any messages directly via WS in the future, handle here
+            pass
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, session_id)
 
 @router.patch("/{session_id}")
 async def update_session(

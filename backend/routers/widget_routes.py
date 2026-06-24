@@ -30,6 +30,7 @@ from services.ollama_service import ollama_service
 from services.redis_service import redis_service
 from utils.nlp_utils import normalize_query
 from utils.intent_utils import detect_intent
+from utils.ws_manager import manager
 
 logger = logging.getLogger("chatbot.routers.widget_routes")
 router = APIRouter(prefix="/api/widget", tags=["Widget API"])
@@ -54,13 +55,16 @@ async def widget_config(
     db: AsyncSession = Depends(get_db)
 ):
     """Returns config JSON for the embeddable chat widget."""
-    stmt = select(Domain).where(Domain.widget_key == x_api_key)
+    stmt = select(Domain).where(
+        (Domain.widget_key == x_api_key) | (Domain.id == x_api_key)
+    )
     result = await db.execute(stmt)
     domain = result.scalar_one_or_none()
 
     if not domain:
         host_header = request.headers.get("host", "")
-        if host_header.startswith("127.0.0.1") or host_header.startswith("localhost"):
+        # Only fallback if the API key is explicitly missing or meant for local dev
+        if (x_api_key in ["local-dev", "test", ""]) and (host_header.startswith("127.0.0.1") or host_header.startswith("localhost")):
             scheme = "wss" if request.url.scheme == "https" else "ws"
             return {
                 "domain_id": "local-dev",
@@ -91,6 +95,19 @@ async def widget_config(
     if logo_url.startswith("/static/"):
         logo_url = f"{base_url}{logo_url}"
 
+    lead_config = settings_data.get("leadConfig") or {}
+    lead_status = lead_config.get("status")
+    if lead_status is None:
+        lead_status = settings_data.get("lead_collection_status", False)
+        
+    lead_limit = lead_config.get("limit")
+    if lead_limit is None:
+        lead_limit = settings_data.get("lead_collection_limit", 2)
+        
+    lead_fields = lead_config.get("fields")
+    if lead_fields is None:
+        lead_fields = settings_data.get("lead_collection_fields", ["name", "email", "phone"])
+
     return {
         "domain_id": domain.id,
         "ws_url": ws_url,
@@ -104,9 +121,9 @@ async def widget_config(
             "logo_url": logo_url,
             "session_persistence": True,
             "lead_collection": {
-                "status": settings_data.get("lead_collection_status", True),
-                "limit": settings_data.get("lead_collection_limit", 2),
-                "fields": settings_data.get("lead_collection_fields", ["name", "email", "phone"])
+                "status": lead_status,
+                "limit": lead_limit,
+                "fields": lead_fields
             },
             "quick_replies": []
         }
@@ -119,7 +136,9 @@ async def capture_lead(
     x_api_key: str = Header(..., alias="X-API-Key"),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(Domain).where(Domain.widget_key == x_api_key)
+    stmt = select(Domain).where(
+        (Domain.widget_key == x_api_key) | (Domain.id == x_api_key)
+    )
     result = await db.execute(stmt)
     domain = result.scalar_one_or_none()
     if not domain:
@@ -193,7 +212,9 @@ async def get_widget_session(
     x_api_key: str = Header(..., alias="X-API-Key"),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(Domain).where(Domain.widget_key == x_api_key)
+    stmt = select(Domain).where(
+        (Domain.widget_key == x_api_key) | (Domain.id == x_api_key)
+    )
     result = await db.execute(stmt)
     domain = result.scalar_one_or_none()
     if not domain:
@@ -247,8 +268,10 @@ async def run_background_chat_updates(
     """Save AI message, update session, log failures, write caches, summarize."""
     try:
         async with AsyncSessionLocal() as db:
+            ai_cm = None
             if ai_msg:
-                db.add(ChatMessage(session_id=session_id, sender="bot", message=ai_msg))
+                ai_cm = ChatMessage(session_id=session_id, sender="bot", message=ai_msg)
+                db.add(ai_cm)
 
                 stmt = select(ChatSession).where(ChatSession.id == session_id)
                 res = await db.execute(stmt)
@@ -256,10 +279,6 @@ async def run_background_chat_updates(
                 if chat_session:
                     chat_session.message_count = (chat_session.message_count or 0) + 1
                     chat_session.last_message_at = datetime.datetime.utcnow()
-                    # FIX #5: only set unread_admin when AI responds successfully
-                    if not failure_reason:
-                        chat_session.unread_admin = (chat_session.unread_admin or 0) + 1
-
                     if failure_reason in ("NO_MATCH", "LOW_CONFIDENCE", "LLM_FAILURE"):
                         chat_session.resolution_type = "UNRESOLVED"
                     elif not failure_reason:
@@ -301,6 +320,21 @@ async def run_background_chat_updates(
                 ))
 
             await db.commit()
+            
+            if ai_cm:
+                await db.refresh(ai_cm)
+                payload = {
+                    "type": "message",
+                    "message": {
+                        "id": ai_cm.id,
+                        "session_id": session_id,
+                        "sender": "bot",
+                        "message": ai_cm.message,
+                        "type": "text",
+                        "created_at": ai_cm.created_at.isoformat() if ai_cm.created_at else datetime.datetime.utcnow().isoformat()
+                    }
+                }
+                await redis_service.publish_message(f"chat:{session_id}", payload)
 
     except Exception as db_err:
         logger.error(f"Background DB update error: {db_err}")
@@ -334,7 +368,7 @@ async def widget_chat_websocket(
     session_id: str,
     db: AsyncSession = Depends(get_db)
 ):
-    await websocket.accept()
+    await manager.connect(websocket, session_id, role="widget")
 
     # FIX #6: accept both widget_key and domain UUID so the JS client works
     # regardless of which value it sends as domain_id query param
@@ -416,8 +450,23 @@ async def widget_chat_websocket(
             user_cm = ChatMessage(session_id=session_id, sender="user", message=user_msg)
             db.add(user_cm)
             chat_session.message_count = (chat_session.message_count or 0) + 1
+            chat_session.unread_admin = (chat_session.unread_admin or 0) + 1
             chat_session.last_message_at = datetime.datetime.utcnow()
             await db.commit()
+            await db.refresh(user_cm)
+            
+            user_payload = {
+                "type": "message",
+                "message": {
+                    "id": user_cm.id,
+                    "session_id": session_id,
+                    "sender": "user",
+                    "message": user_cm.message,
+                    "type": "text",
+                    "created_at": user_cm.created_at.isoformat() if user_cm.created_at else datetime.datetime.utcnow().isoformat()
+                }
+            }
+            await redis_service.publish_message(f"chat:{session_id}", user_payload)
 
             ai_active = (
                 chat_session.status == "open"
@@ -777,3 +826,4 @@ async def widget_chat_websocket(
 
     except WebSocketDisconnect:
         logger.info(f"WS disconnected: session={session_id}")
+        manager.disconnect(websocket, session_id)

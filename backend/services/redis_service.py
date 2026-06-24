@@ -69,4 +69,12 @@ class RedisService:
         await self.redis.ltrim(key, -20, -1)
         await self.redis.expire(key, expire)
 
+    async def publish_message(self, channel: str, message: dict):
+        """Publish a JSON message to a Redis channel."""
+        await self.redis.publish(channel, json.dumps(message))
+
+    def get_pubsub(self):
+        """Return a Redis pubsub object."""
+        return self.redis.pubsub()
+
 redis_service = RedisService()

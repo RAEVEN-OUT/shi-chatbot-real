@@ -620,8 +620,9 @@ function DomainManager({ deletingId, domain, domains, setDomains, categories, se
         return;
       }
       const res = await api.post('/faq-categories', createCategoryData);
-      setCategories(prev => [...prev, res.data]);
-      const newIds = [...assignedCatIds, res.data.id];
+      const newCat = res.data.category || res.data;
+      setCategories(prev => [...prev, newCat]);
+      const newIds = [...assignedCatIds, newCat.id];
       await api.put(`/domains/${domain.id}/categories`, { category_ids: newIds });
       setDomainCategoryMap(prev => ({ ...prev, [domain.id]: newIds }));
       showToast('Category created', 'success');
@@ -778,7 +779,8 @@ function CategoryManager({ deletingId, category, categories, setCategories, open
         aliases: createQuestionData.aliases ? createQuestionData.aliases.split(',').map(a => a.trim()).filter(a => a) : []
       };
       const res = await api.post('/faq-questions', payload);
-      setCategories(prev => prev.map(c => c.id === category.id ? { ...c, questions: [res.data, ...(c.questions || [])], questionsLoaded: true } : c));
+      const newQ = res.data.question || res.data;
+      setCategories(prev => prev.map(c => c.id === category.id ? { ...c, questions: [newQ, ...(c.questions || [])], questionsLoaded: true } : c));
       showToast('Question created', 'success');
       setCreateQuestionData({ question: '', answer: '', aliases: '', status: 'active' });
       setActiveTab('assignments');
@@ -1270,14 +1272,15 @@ function CreateCategoryModal({ isOpen, onClose, parentId, domains, categories, s
     setFormErrors({});
     try {
       const res = await api.post('/faq-categories', { ...formData });
-      setCategories(prev => [...prev, res.data]);
+      const newCat = res.data.category || res.data;
+      setCategories(prev => [...prev, newCat]);
       if (parentId) {
-        const newCats = [...(domainCategoryMap[parentId] || []), res.data.id];
+        const newCats = [...(domainCategoryMap[parentId] || []), newCat.id];
         await api.put(`/domains/${parentId}/categories`, { category_ids: newCats });
         setDomainCategoryMap(prev => ({ ...prev, [parentId]: newCats }));
       }
       showToast('Category created', 'success');
-      selectNode('category', res.data.id, res.data);
+      selectNode('category', newCat.id, newCat);
       onClose();
     } catch (e) {
       const errData = e.response?.data;
@@ -1310,10 +1313,11 @@ function EditCategoryModal({ isOpen, onClose, category, categories, setCategorie
     setSaving(true);
     setFormErrors({});
     try {
-      const res = await api.put(`/faq-categories/${category.id}`, { ...formData });
-      setCategories(prev => prev.map(c => c.id === category.id ? { ...res.data, questions: category.questions, questionsLoaded: category.questionsLoaded } : c));
+      await api.put(`/faq-categories/${category.id}`, { ...formData });
+      const updatedCategory = { ...category, ...formData };
+      setCategories(prev => prev.map(c => c.id === category.id ? updatedCategory : c));
       showToast('Category updated', 'success');
-      selectNode('category', res.data.id, { ...res.data, questions: category.questions, questionsLoaded: category.questionsLoaded });
+      selectNode('category', category.id, updatedCategory);
       onClose();
     } catch (e) {
       const errData = e.response?.data;
@@ -1368,9 +1372,10 @@ function CreateQuestionModal({ isOpen, onClose, parentId, categories, setCategor
     setFormErrors({});
     try {
       const res = await api.post('/faq-questions', { ...formData, faq_id: parentId });
-      setCategories(prev => prev.map(c => c.id === parentId ? { ...c, questions: [res.data, ...(c.questions || [])], questionsLoaded: true } : c));
+      const newQ = res.data.question || res.data;
+      setCategories(prev => prev.map(c => c.id === parentId ? { ...c, questions: [newQ, ...(c.questions || [])], questionsLoaded: true } : c));
       showToast('Question created and vector indexing triggered', 'success');
-      selectNode('question', res.data.id, res.data);
+      selectNode('question', newQ.id, newQ);
       onClose();
     } catch (e) {
       const errData = e.response?.data;

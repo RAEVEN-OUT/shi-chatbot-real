@@ -125,6 +125,7 @@ async def create_domain(
     
     new_domain = Domain(
         domain_name=data.domain_url,
+        widget_key=str(uuid.uuid4()),
         organization_id=user["postgres_user"].organization_id,
         settings=settings_dict
     )

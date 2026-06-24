@@ -65,7 +65,7 @@ export default function Leads() {
 
   const getDomainName = (domainId) => {
     const domain = domains.find(d => d.id === domainId || d.domain_id === domainId);
-    return domain ? domain.name : 'Unknown Domain';
+    return domain ? (domain.name || domain.domain_name) : 'Unknown Domain';
   };
 
   return (
@@ -88,7 +88,7 @@ export default function Leads() {
           >
             <option value="">All Domains</option>
             {domains.map(d => (
-              <option key={d.id} value={d.id}>{d.name}</option>
+              <option key={d.id} value={d.id}>{d.name || d.domain_name}</option>
             ))}
           </select>
           

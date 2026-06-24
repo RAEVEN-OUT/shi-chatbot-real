@@ -29,8 +29,8 @@ export const chatbotService = {
     const res = await api.get(`/lead-config/${domainId}`);
     return res.data;
   },
-  updateLeadConfig: async (domainId, payload) => {
-    const res = await api.post(`/lead-config/${domainId}`, payload);
+  updateLeadConfig: async (domainId, payload, options) => {
+    const res = await api.post(`/lead-config/${domainId}`, payload, options);
     return res.data;
   },
   listAdminAiLogs: async () => {

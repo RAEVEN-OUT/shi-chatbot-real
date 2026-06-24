@@ -1,7 +1,7 @@
 'use client';
 import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import { formatDate } from '@/utils/dateFormatter';
+import { formatDate, formatTime } from '@/utils/dateFormatter';
 import { chatSessionService } from '@/services/chatSessionService';
 import { domainService } from '@/services/domainService';
 import { db } from '@/firebase/config';
@@ -479,7 +479,7 @@ export default function Conversations() {
                         </span>
                         <span className="text-[10px] text-gray-500 flex items-center gap-1">
                           <Clock size={10} />
-                          {formatDate(session.last_message_at, customTimeStamp)}
+                          {formatDate(session.last_message_at || session.created_at, customTimeStamp)}
                         </span>
                       </div>
 
@@ -499,7 +499,7 @@ export default function Conversations() {
                     {/* Status badges */}
                     <div className="flex items-center gap-1.5 flex-wrap mt-1">
                       <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                        session.status === 'active' ? 'bg-emerald-100 text-emerald-400 border border-emerald-500/20' :
+                        session.status === 'active' || session.status === 'open' ? 'bg-emerald-100 text-emerald-400 border border-emerald-500/20' :
                         session.status === 'spam' ? 'bg-red-100 text-gray-500 border border-red-500/20' :
                         'bg-gray-500/10 text-gray-500 border border-slate-500/20'
                       }`}>
@@ -645,52 +645,81 @@ export default function Conversations() {
 
                 {/* Messages stream */}
                 <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 flex flex-col bg-gray-50">
-                  {selectedSession.messages_json?.map((msg, idx) => {
-                    const isCustomer = msg.sender === 'customer';
+                  {selectedSession.messages_json?.map((msg, idx, arr) => {
+                    const isCustomer = msg.sender === 'customer' || msg.sender === 'user';
                     const isSystem = msg.sender === 'system';
-                    const isAI = msg.sender === 'ai';
+                    const isAI = msg.sender === 'ai' || msg.sender === 'bot';
 
+                    let dateSeparator = null;
+                    const currentMsgDate = new Date(msg.timestamp || msg.created_at);
+                    const prevMsgDate = idx > 0 ? new Date(arr[idx-1].timestamp || arr[idx-1].created_at) : null;
+                    
+                    // Show separator if gap > 1 hour, or it's the first message
+                    const showSeparator = !prevMsgDate || (currentMsgDate - prevMsgDate > 1000 * 60 * 60);
+                    
+                    if (showSeparator && !isNaN(currentMsgDate.getTime())) {
+                      const dateText = currentMsgDate.toLocaleDateString(undefined, { 
+                        weekday: 'short', month: 'short', day: 'numeric', 
+                        hour: '2-digit', minute: '2-digit' 
+                      });
+                      dateSeparator = (
+                        <div key={`sep-${idx}`} className="flex justify-center my-4 w-full">
+                          <span className="text-[10px] font-medium text-gray-500 bg-gray-200/60 px-3 py-1 rounded-full uppercase tracking-widest shadow-sm">
+                            {dateText}
+                          </span>
+                        </div>
+                      );
+                    }
+
+                    let msgContent = null;
                     if (isSystem) {
-                      return (
+                      msgContent = (
                         <div key={msg.id || idx} className="self-center my-2 text-[11px] bg-white border-gray-200 border border-gray-200 text-gray-500 px-3 py-1 rounded-full flex items-center gap-1 font-medium">
                           <Sparkles size={10} className="text-blue-400" />
                           {msg.message}
                         </div>
                       );
-                    }
-
-                    return (
-                      <div
-                        key={msg.id || idx}
-                        className={`flex flex-col max-w-[85%] md:max-w-[70%] ${isCustomer ? 'self-start items-start' : 'self-end items-end'}`}
-                      >
+                    } else {
+                      msgContent = (
                         <div
-                          className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
-                            isCustomer
-                              ? 'bg-white border-gray-200 border border-gray-200 text-gray-800 rounded-bl-none'
-                              : isAI
-                              ? 'bg-indigo-600/10 border border-indigo-500/20 text-gray-800 rounded-br-none'
-                              : 'bg-blue-600 text-white rounded-br-none shadow-md shadow-blue-600/10'
-                          }`}
+                          key={msg.id || idx}
+                          className={`flex flex-col max-w-[85%] md:max-w-[70%] ${isCustomer ? 'self-end items-end' : 'self-start items-start'}`}
                         >
-                          {msg.message}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-1 px-1">
-                          {isAI && msg.source && (
-                            <span className="text-[8px] bg-indigo-500/20 text-indigo-300 px-1 py-0.2 rounded font-bold uppercase tracking-wider">
-                              AI: {msg.source}
+                          <div
+                            className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                              isCustomer
+                                ? 'bg-blue-600 text-white rounded-br-none shadow-md shadow-blue-600/10'
+                                : isAI
+                                ? 'bg-white border-gray-200 border border-gray-200 text-gray-800 rounded-bl-none'
+                                : 'bg-indigo-600/10 border border-indigo-500/20 text-gray-800 rounded-bl-none'
+                            }`}
+                          >
+                            {msg.message}
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-1 px-1">
+                            {isAI && msg.source && (
+                              <span className="text-[8px] bg-indigo-500/20 text-indigo-300 px-1 py-0.2 rounded font-bold uppercase tracking-wider">
+                                AI: {msg.source}
+                              </span>
+                            )}
+                            {!isCustomer && !isAI && (
+                              <span className="text-[8px] bg-blue-500/20 text-gray-700 px-1 py-0.2 rounded font-bold uppercase tracking-wider">
+                                ADMIN
+                              </span>
+                            )}
+                            <span className="text-[10px] text-gray-500">
+                              {formatTime(msg.timestamp || msg.created_at, customTimeStamp)}
                             </span>
-                          )}
-                          {!isCustomer && !isAI && (
-                            <span className="text-[8px] bg-blue-500/20 text-gray-700 px-1 py-0.2 rounded font-bold uppercase tracking-wider">
-                              ADMIN
-                            </span>
-                          )}
-                          <span className="text-[10px] text-gray-500">
-                            {formatDate(msg.timestamp, customTimeStamp)}
-                          </span>
+                          </div>
                         </div>
-                      </div>
+                      );
+                    }
+                    
+                    return (
+                      <React.Fragment key={msg.id || idx}>
+                        {dateSeparator}
+                        {msgContent}
+                      </React.Fragment>
                     );
                   })}
                   <div ref={messagesEndRef} />

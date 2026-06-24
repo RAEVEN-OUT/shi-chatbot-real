@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import api from '@/utils/api';
 import { Send, User, MessageCircle } from 'lucide-react';
-import { formatDate } from '@/utils/dateFormatter';
+import { formatDate, formatTime } from '@/utils/dateFormatter';
 import { auth } from '@/firebase/config';
 
 export default function SupportChat() {
@@ -121,7 +121,7 @@ export default function SupportChat() {
                     <p className="text-sm">{msg.text}</p>
                     {msg.timestamp && (
                       <p className="text-[9px] opacity-60 mt-2 text-right">
-                        {formatDate(msg.timestamp, userData?.custom_time_stamp)}
+                        {formatTime(msg.timestamp, userData?.custom_time_stamp)}
                       </p>
                     )}
                   </div>

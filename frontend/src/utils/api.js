@@ -116,29 +116,8 @@ api.interceptors.request.use(async (config) => {
 
 const rawGet = api.get.bind(api);
 api.get = async (url, config = {}) => {
-  if (config.cache === false) {
-    return rawGet(url, config);
-  }
-
-  const key = getCacheKey(url, config);
-  const cached = readCachedResponse(key);
-  const now = Date.now();
-
-  if (cached) {
-    if (now - cached.savedAt > GET_CACHE_STALE_AFTER && !pendingRefreshes.has(key)) {
-      const refresh = rawGet(url, { ...config, cache: false })
-        .then(response => {
-          writeCachedResponse(key, response);
-          return response;
-        })
-        .finally(() => pendingRefreshes.delete(key));
-      pendingRefreshes.set(key, refresh);
-    }
-    return responseFromCache(cached, config);
-  }
-
   const response = await rawGet(url, config);
-  writeCachedResponse(key, response);
+  // Disabled caching to ensure real-time data is retrieved directly from DB
   return response;
 };
 

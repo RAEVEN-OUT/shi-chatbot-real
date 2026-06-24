@@ -1,28 +1,97 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { chatbotService } from '@/services/chatbotService';
-import { Save, AlertCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { useToast } from '@/contexts/ToastContext';
 
 export default function LeadCollectionTab({ domain }) {
   const toast = useToast();
   const [config, setConfig] = useState(null);
-  const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [saveStatus, setSaveStatus] = useState('loading');
+
+  const saveTimeoutRef = useRef(null);
+  const latestConfigRef = useRef(null);
+  const saveVersionRef = useRef(0);
+  const abortControllerRef = useRef(null);
 
   useEffect(() => {
     const fetchConfig = async () => {
       try {
         const data = await chatbotService.getLeadConfig(domain.id);
         setConfig(data);
+        latestConfigRef.current = data;
+        setSaveStatus('saved');
       } catch (err) {
         console.error(err);
         toast.error('Failed to load lead collection configuration.');
+        setSaveStatus('error');
       } finally {
         setLoading(false);
       }
     };
     fetchConfig();
   }, [domain.id, toast]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        // Best effort final save if there's a pending change
+        if (latestConfigRef.current) {
+          chatbotService.updateLeadConfig(domain.id, latestConfigRef.current).catch(() => {});
+        }
+      }
+    };
+  }, [domain.id]);
+
+  const saveConfig = async (configToSave) => {
+    const currentVersion = ++saveVersionRef.current;
+    
+    // Abort previous in-flight request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    setSaveStatus('saving');
+    try {
+      await chatbotService.updateLeadConfig(domain.id, configToSave, { signal: controller.signal });
+      if (currentVersion === saveVersionRef.current) {
+        setSaveStatus('saved');
+      }
+    } catch (err) {
+      // Ignore request cancellation errors
+      const isCancel = err.name === 'CanceledError' || err.code === 'ERR_CANCELED' || err.message === 'canceled';
+      if (isCancel) {
+        return;
+      }
+      
+      if (currentVersion === saveVersionRef.current) {
+        console.error(err);
+        setSaveStatus('error');
+        toast.error("Failed to auto-save lead collection settings.");
+      }
+    }
+  };
+
+  const queueSave = (newConfig, immediate = false) => {
+    setConfig(newConfig);
+    latestConfigRef.current = newConfig;
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+
+    setSaveStatus('saving');
+
+    saveTimeoutRef.current = setTimeout(
+      () => {
+        saveConfig(newConfig);
+      },
+      immediate ? 200 : 800
+    );
+  };
 
   const handleFieldChange = (field) => {
     if (!config) return;
@@ -31,11 +100,13 @@ export default function LeadCollectionTab({ domain }) {
       : [...config.fields, field];
       
     // If no fields are selected, force status to inactive and limit to 0
+    let updated;
     if (newFields.length === 0) {
-      setConfig({ ...config, fields: newFields, status: false, limit: 0 });
+      updated = { ...config, fields: newFields, status: false, limit: 0 };
     } else {
-      setConfig({ ...config, fields: newFields });
+      updated = { ...config, fields: newFields };
     }
+    queueSave(updated, true);
   };
 
   const handleStatusChange = (newStatus) => {
@@ -44,32 +115,52 @@ export default function LeadCollectionTab({ domain }) {
        toast.error("Please select at least one field to collect before enabling.");
        return;
     }
-    setConfig({ ...config, status: newStatus });
-  };
-
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await chatbotService.updateLeadConfig(domain.id, config);
-      toast.success("Lead collection settings updated successfully!");
-    } catch(e) {
-      console.error(e);
-      toast.error("Failed to update lead collection settings.");
-    } finally {
-      setSaving(false);
-    }
+    const updated = { ...config, status: newStatus };
+    queueSave(updated, true);
   };
 
   if (loading || !config) {
-     return <div className="p-8 text-center"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div></div>;
+     return (
+       <div className="p-8 text-center">
+         <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto"></div>
+       </div>
+     );
   }
 
   return (
     <div className="max-w-3xl space-y-6">
       <div className="bg-white p-6 rounded-2xl border border-gray-200">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-start justify-between mb-6">
           <div>
-            <h3 className="text-lg font-bold text-gray-900">Lead Collection</h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-bold text-gray-900">Lead Collection</h3>
+              {saveStatus === 'saving' && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                  Saving...
+                </span>
+              )}
+              {saveStatus === 'saved' && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-100">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  Saved
+                </span>
+              )}
+              {saveStatus === 'error' && (
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-50 text-rose-700 border border-rose-100">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                    Error saving
+                  </span>
+                  <button 
+                    onClick={() => saveConfig(config)}
+                    className="text-xs text-primary hover:underline font-medium"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+            </div>
             <p className="text-sm text-gray-500 mt-1">Configure when and how to ask users for their contact details.</p>
           </div>
           
@@ -104,7 +195,16 @@ export default function LeadCollectionTab({ domain }) {
                type="number"
                min="0"
                value={config.limit}
-               onChange={(e) => setConfig({...config, limit: parseInt(e.target.value) || 0})}
+               onChange={(e) => {
+                 const val = parseInt(e.target.value) || 0;
+                 queueSave({ ...config, limit: val }, false);
+               }}
+               onBlur={() => {
+                 if (saveTimeoutRef.current) {
+                   clearTimeout(saveTimeoutRef.current);
+                   saveConfig(latestConfigRef.current);
+                 }
+               }}
                className="w-full sm:w-48 bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
              />
           </div>
@@ -134,16 +234,6 @@ export default function LeadCollectionTab({ domain }) {
                 </div>
              )}
           </div>
-        </div>
-
-        <div className="mt-8 pt-6 border-t border-gray-100 flex justify-end">
-           <button 
-              onClick={handleSave}
-              disabled={saving}
-              className="flex items-center gap-2 px-6 py-2.5 bg-primary text-white rounded-xl font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-           >
-              <Save size={18} /> {saving ? 'Saving...' : 'Save Settings'}
-           </button>
         </div>
       </div>
     </div>
