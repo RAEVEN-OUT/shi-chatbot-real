@@ -48,3 +48,18 @@ db.sqlite3
 instance/
 qdrant_storage/
 data/
+
+# Large binaries & installers
+*.exe
+*.msi
+*.zip
+*.tar.gz
+
+# Temp & Debugging Files
+all_users.txt
+bugs.txt
+bugs_out.txt
+exact_bugs.txt
+scratch_user_msg.txt
+*.patch
+backend/test_ollama.py

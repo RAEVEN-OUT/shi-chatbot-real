@@ -222,6 +222,7 @@ async def ask_chatbot(
                 tenant_id=domain.organization_id,
                 query_vector=query_vector,
                 category_ids=category_ids,
+                domain_id=request.domain_id,
                 limit=3
             )
         except Exception as e:
@@ -254,7 +255,7 @@ async def ask_chatbot(
     max_score = top_chunks[0].get("score", 0)
 
     # 5. Fast path
-    if max_score >= 0.95:
+    if max_score >= 0.90:
         fast_answer = top_chunks[0].get("payload", {}).get("answer")
         if fast_answer:
             logger.info({"event": "FAST_PATH", "question": request.message, "score": max_score})
