@@ -144,7 +144,7 @@ async def create_faq_question(
 
         await qdrant_service.add_chunk(
             tenant_id=user["postgres_user"].organization_id,
-            domain_id=new_q.faq_id,
+            domain_id="",
             text=text_to_embed,
             vector=vector,
             metadata={
@@ -207,7 +207,7 @@ async def update_faq_question(
             vector = await ollama_service.generate_embedding(text_to_embed)
             await qdrant_service.add_chunk(
                 tenant_id=user["postgres_user"].organization_id,
-                domain_id=q.faq_id,
+                domain_id="",
                 text=text_to_embed,
                 vector=vector,
                 metadata={

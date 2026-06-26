@@ -255,7 +255,7 @@ async def ask_chatbot(
     max_score = top_chunks[0].get("score", 0)
 
     # 5. Fast path
-    if max_score >= 0.90:
+    if max_score >= 0.95:
         fast_answer = top_chunks[0].get("payload", {}).get("answer")
         if fast_answer:
             logger.info({"event": "FAST_PATH", "question": request.message, "score": max_score})
@@ -288,6 +288,7 @@ async def ask_chatbot(
     system_prompt = (
         f"You are a helpful and precise AI assistant for {domain.domain_name}.\n"
         f"Answer using ONLY the context below.\n"
+        f"Be extremely brief and concise. Do not add any conversational filler or extra details.\n"
         f"You may fix minor spelling mistakes in the user's question.\n"
         f"If the context does not contain the answer, reply EXACTLY with:\n"
         f"\"{fallback}\"\n"

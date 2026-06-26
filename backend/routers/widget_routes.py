@@ -404,14 +404,14 @@ async def widget_chat_websocket(
         await db.commit()
         await db.refresh(chat_session)
 
-        # Fetch and cache category_ids once per connection
-        category_ids = await redis_service.get_domain_categories(domain.id)
-        if category_ids is None:
-            cat_res = await db.execute(
-                select(DomainCategory.category_id).where(DomainCategory.domain_id == domain.id)
-            )
-            category_ids = list(cat_res.scalars().all())
-            asyncio.create_task(redis_service.set_domain_categories(domain.id, category_ids))
+    # Fetch and cache category_ids once per connection
+    category_ids = await redis_service.get_domain_categories(domain.id)
+    if category_ids is None:
+        cat_res = await db.execute(
+            select(DomainCategory.category_id).where(DomainCategory.domain_id == domain.id)
+        )
+        category_ids = list(cat_res.scalars().all())
+        asyncio.create_task(redis_service.set_domain_categories(domain.id, category_ids))
 
     client_ip = websocket.client.host if websocket.client else "unknown"
 
@@ -577,7 +577,7 @@ async def widget_chat_websocket(
             # Only use successful prior exchanges (skip fallback responses).
             if history_msgs:
                 words = set(normalized_q.lower().split())
-                is_short = len(words) < 6
+                is_short = len(words) <= 4
                 has_followup = bool(words & _FOLLOWUP_WORDS)
 
                 if is_short or has_followup:
@@ -697,7 +697,7 @@ async def widget_chat_websocket(
             max_score = top_chunks[0].get("score", 0)
 
             # ── Fast path ≥ 0.95 ───────────────────────────────────────────
-            if max_score >= 0.90:
+            if max_score >= 0.95:
                 fast_answer = top_chunks[0].get("payload", {}).get("answer")
                 if fast_answer:
                     logger.info({
@@ -783,6 +783,7 @@ async def widget_chat_websocket(
             system_prompt = (
                 f"You are a helpful AI assistant for {domain.domain_name}.\n"
                 f"Answer using ONLY the information in the Knowledge base below.\n"
+                f"Be extremely brief and concise. Do not add any conversational filler or extra details.\n"
                 f"You may fix obvious spelling mistakes in the user's question.\n"
                 f"If the Knowledge base does not contain the answer, reply EXACTLY with:\n"
                 f"\"{fallback}\"\n"
