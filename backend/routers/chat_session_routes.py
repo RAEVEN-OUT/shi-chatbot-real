@@ -19,18 +19,22 @@ router = APIRouter(prefix="/chat-sessions", tags=["chat_sessions"])
 notifications_router = APIRouter(prefix="/notifications", tags=["notifications"])
 admin_ws_router = APIRouter(prefix="/api/ws/admin", tags=["admin_ws"])
 
+
 class MessageCreate(BaseModel):
     message: str
     sender: str
     type: str = "text"
+
 
 class SessionUpdate(BaseModel):
     status: Optional[str] = None
     ai_enabled: Optional[bool] = None
     admin_joined: Optional[bool] = None
 
+
 class BulkDeleteRequest(BaseModel):
     session_ids: List[str]
+
 
 @router.get("")
 async def list_sessions(
@@ -57,23 +61,21 @@ async def list_sessions(
         .scalar_subquery()
     )
 
-    # Get all domains user has access to
     if user["role"] == "admin":
         stmt = select(ChatSession, latest_msg_sub.label("last_message")).options(
             selectinload(ChatSession.domain)
         )
     else:
-        # Join with domain to filter by org
         stmt = (
             select(ChatSession, latest_msg_sub.label("last_message"))
             .join(Domain)
             .where(Domain.organization_id == user["postgres_user"].organization_id)
             .options(selectinload(ChatSession.domain))
         )
-        
+
     result = await db.execute(stmt)
     sessions_data = result.all()
-    
+
     return [
         {
             "id": s.id,
@@ -92,6 +94,7 @@ async def list_sessions(
         for s, last_msg in sessions_data
     ]
 
+
 @router.get("/{session_id}")
 async def get_session(
     session_id: str,
@@ -101,10 +104,10 @@ async def get_session(
     stmt = select(ChatSession).where(ChatSession.id == session_id).options(selectinload(ChatSession.messages))
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-        
+
     # Check access
     if user["role"] != "admin":
         domain_stmt = select(Domain).where(Domain.id == session.domain_id)
@@ -112,12 +115,12 @@ async def get_session(
         domain = d_result.scalar_one_or_none()
         if not domain or domain.organization_id != user["postgres_user"].organization_id:
             raise HTTPException(status_code=403, detail="Access denied")
-            
+
     # Auto-clear notifications when admin opens the chat
     if session.unread_admin and session.unread_admin > 0:
         session.unread_admin = 0
         await db.commit()
-            
+
     return {
         "id": session.id,
         "domain_id": session.domain_id,
@@ -140,6 +143,7 @@ async def get_session(
         ]
     }
 
+
 @router.post("/{session_id}/messages")
 async def send_message(
     session_id: str,
@@ -150,13 +154,17 @@ async def send_message(
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-        
-    seq_res = await db.execute(sql_text("UPDATE chat_sessions SET next_sequence = next_sequence + 1 WHERE id = :id RETURNING next_sequence"), {"id": session.id})
+
+    seq_res = await db.execute(
+        sql_text("UPDATE chat_sessions SET next_sequence = next_sequence + 1 WHERE id = :id RETURNING next_sequence"),
+        {"id": session.id}
+    )
     seq_val = seq_res.scalar()
-    
+
+    now = datetime.datetime.utcnow()
     msg = ChatMessage(
         session_id=session.id,
         sender=data.sender,
@@ -166,19 +174,20 @@ async def send_message(
         status="completed"
     )
     db.add(msg)
-    
-    # Update session analytics
+
     session.message_count += 1
-    # session.last_message_at will be updated by sqlalchemy logic or we set manually if needed. Let's let the DB defaults handle it or set it manually.
-    
+    session.last_message_at = now
+
     if data.sender == 'user':
         session.unread_admin += 1
     elif data.sender == 'admin':
         session.unread_customer += 1
-        
+
     await db.commit()
-    
-    # Publish to Redis
+    await db.refresh(msg)
+
+    # Publish to Redis — this triggers both session WebSocket and dashboard WebSocket
+    created_at_str = msg.created_at.isoformat() if msg.created_at else now.isoformat()
     payload = {
         "type": "message",
         "message": {
@@ -189,23 +198,46 @@ async def send_message(
             "type": msg.type,
             "sequence": msg.sequence,
             "status": msg.status,
-            "created_at": msg.created_at.isoformat() if msg.created_at else datetime.datetime.utcnow().isoformat()
+            "created_at": created_at_str
         }
     }
     await redis_service.publish_message(f"chat:{session_id}", payload)
-    
+
     return {"status": "success", "message_id": msg.id}
+
+
+# ─── Admin WebSocket: per-session chat stream ────────────────────────────────
 
 @admin_ws_router.websocket("/chat/{session_id}")
 async def admin_chat_websocket(websocket: WebSocket, session_id: str):
     await manager.connect(websocket, session_id, role="admin")
     try:
         while True:
-            data = await websocket.receive_text()
-            # If the admin frontend sends any messages directly via WS in the future, handle here
-            pass
+            # Keep the connection alive; handle any future admin WS messages here
+            await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
+
+
+# ─── Admin WebSocket: dashboard conversation-list stream ─────────────────────
+
+@admin_ws_router.websocket("/dashboard")
+async def admin_dashboard_websocket(websocket: WebSocket):
+    """
+    Streams lightweight conversation_update events to the admin dashboard.
+    The frontend uses this to reorder the conversation list and update
+    previews/unread counts without polling.
+    """
+    await manager.connect_dashboard(websocket)
+    try:
+        while True:
+            # Keep alive; we only push, never read from this socket
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect_dashboard(websocket)
+
+
+# ─── REST endpoints ───────────────────────────────────────────────────────────
 
 @router.patch("/{session_id}")
 async def update_session(
@@ -217,19 +249,20 @@ async def update_session(
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
-    
+
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-        
+
     if data.status is not None:
         session.status = data.status
     if data.ai_enabled is not None:
         session.ai_enabled = data.ai_enabled
     if data.admin_joined is not None:
         session.admin_joined = data.admin_joined
-        
+
     await db.commit()
     return {"status": "success"}
+
 
 @router.post("/{session_id}/read")
 async def mark_session_read(
@@ -240,12 +273,13 @@ async def mark_session_read(
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
-    
+
     if session:
         session.unread_admin = 0
         await db.commit()
-        
+
     return {"status": "success"}
+
 
 @router.delete("/{session_id}")
 async def delete_session(
@@ -256,12 +290,13 @@ async def delete_session(
     stmt = select(ChatSession).where(ChatSession.id == session_id)
     result = await db.execute(stmt)
     session = result.scalar_one_or_none()
-    
+
     if session:
         await db.delete(session)
         await db.commit()
-        
+
     return {"status": "success"}
+
 
 @router.post("/bulk-delete")
 async def bulk_delete_sessions(
@@ -272,26 +307,28 @@ async def bulk_delete_sessions(
     stmt = select(ChatSession).where(ChatSession.id.in_(data.session_ids))
     result = await db.execute(stmt)
     sessions = result.scalars().all()
-    
+
     for s in sessions:
         await db.delete(s)
-        
+
     await db.commit()
     return {"status": "success", "deleted_count": len(sessions)}
+
 
 @notifications_router.get("/unread-count")
 async def get_unread_count(
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
-    # Sum unread_admin across all user's sessions
     if user["role"] == "admin":
         stmt = select(ChatSession)
     else:
-        stmt = select(ChatSession).join(Domain).where(Domain.organization_id == user["postgres_user"].organization_id)
-        
+        stmt = select(ChatSession).join(Domain).where(
+            Domain.organization_id == user["postgres_user"].organization_id
+        )
+
     result = await db.execute(stmt)
     sessions = result.scalars().all()
-    
+
     total_unread = sum(s.unread_admin for s in sessions)
     return {"unread_count": total_unread}

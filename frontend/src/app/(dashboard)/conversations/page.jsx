@@ -1,14 +1,12 @@
 'use client';
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatDate, formatTime } from '@/utils/dateFormatter';
 import { chatSessionService } from '@/services/chatSessionService';
 import { domainService } from '@/services/domainService';
-import { db } from '@/firebase/config';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { 
-  MessageSquare, Calendar, User, Mail, Phone, Tag, Search, 
-  Clock, Send, Bot, Check, ShieldAlert, CheckCheck, XCircle, 
+import {
+  MessageSquare, Calendar, User, Mail, Phone, Tag, Search,
+  Clock, Send, Bot, Check, ShieldAlert, CheckCheck, XCircle,
   Sparkles, RefreshCw, Power, PowerOff, HelpCircle, Archive,
   Trash2, Square, CheckSquare
 } from 'lucide-react';
@@ -25,130 +23,187 @@ export default function Conversations() {
   const [selectedSessionId, setSelectedSessionId] = useState(null);
   const [selectedSession, setSelectedSession] = useState(null);
   const [loadingSessionDetail, setLoadingSessionDetail] = useState(false);
-  
+
   // Bulk Delete State
   const [selectedSessions, setSelectedSessions] = useState(new Set());
   const [deleting, setDeleting] = useState(false);
-  
+
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDomainId, setSelectedDomainId] = useState('');
-  const [statusTab, setStatusTab] = useState('active'); // 'active' | 'closed' | 'spam' | 'all'
+  const [statusTab, setStatusTab] = useState('active');
   const [page, setPage] = useState(1);
   const [pagination, setPagination] = useState({ page: 1, total_pages: 1 });
 
   // Input states
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
-  
-  // Action loading states (prevent double-clicks)
+
+  // Action loading states
   const [togglingAI, setTogglingAI] = useState(false);
   const [closingSession, setClosingSession] = useState(false);
   const [togglingSpam, setTogglingSpam] = useState(false);
-  
+
+  // Unread indicators per tab
+  const [unreadByTab, setUnreadByTab] = useState({ active: false, closed: false, spam: false, all: false });
+  const [wsTrigger, setWsTrigger] = useState(0);
+
   const messagesEndRef = useRef(null);
+  const dashboardWsRef = useRef(null);
+  const sessionWsRef = useRef(null);
+  const dashboardWsReconnectRef = useRef(null);
+  const sessionWsReconnectRef = useRef(null);
+
+  // ─── Initial data load ────────────────────────────────────────────────────
 
   useEffect(() => {
     if (currentUser) {
       loadDomains();
       loadSessions();
     }
-  }, [currentUser?.uid, selectedDomainId, statusTab, searchQuery, page]);
+  }, [currentUser?.uid, selectedDomainId, statusTab, searchQuery, page, wsTrigger]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [selectedSession?.messages_json]);
 
-  // Poll active session for realtime updates
-  useEffect(() => {
-    if (!selectedSessionId) return;
+  // ─── Dashboard WebSocket (conversation list updates) ──────────────────────
 
-    // Load immediately
-    loadActiveSession(selectedSessionId);
+  const connectDashboardWs = useCallback(() => {
+    if (!currentUser) return;
 
-    const baseUrl = process.env.NEXT_PUBLIC_WITHOUT_API_URL || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '') || 'http://127.0.0.1:8005';
-    const wsUrl = baseUrl.replace(/^http/, 'ws') + `/api/ws/admin/chat/${selectedSessionId}`;
-    
-    // Connect to admin websocket for this session
+    const baseUrl = process.env.NEXT_PUBLIC_WITHOUT_API_URL
+      || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '')
+      || 'http://127.0.0.1:8005';
+    const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/ws/admin/dashboard';
+
     const ws = new WebSocket(wsUrl);
+    dashboardWsRef.current = ws;
+
+    ws.onopen = () => {
+      // Clear any pending reconnect timer
+      if (dashboardWsReconnectRef.current) {
+        clearTimeout(dashboardWsReconnectRef.current);
+        dashboardWsReconnectRef.current = null;
+      }
+    };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'message' && data.message) {
-          setSelectedSession(prev => {
-            if (!prev) return prev;
-            // Prevent duplicate messages if already present
-            const exists = prev.messages_json?.find(m => m.id === data.message.id);
-            if (exists) return prev;
-            
-            return {
-              ...prev,
-              messages_json: [...(prev.messages_json || []), data.message]
-            };
-          });
-
-          // Also update the list preview
-          setSessions(prevSessions => 
-            prevSessions.map(s => {
-              if (s.session_id === selectedSessionId) {
-                if (data.message.sender === 'customer') {
-                  chatSessionService.markRead(selectedSessionId).catch(console.error);
-                }
-                return {
-                  ...s,
-                  last_message: data.message.message,
-                  unread_admin_count: 0
-                };
-              }
-              return s;
-            })
-          );
+        if (data.type === 'conversation_update') {
+          // Trigger a lightweight background reload of the active sessions list
+          // so tabs, unread counts, and session sorting stay perfectly synced.
+          setWsTrigger(prev => prev + 1);
         }
       } catch (err) {
-        console.error("Failed to parse websocket message", err);
+        console.error('Dashboard WS parse error', err);
       }
     };
 
+    ws.onclose = () => {
+      // Reconnect after 3 s and do a single background fetch to catch up
+      dashboardWsReconnectRef.current = setTimeout(() => {
+        loadSessions(); // catch-up fetch after disconnect
+        connectDashboardWs();
+      }, 3000);
+    };
+
+    ws.onerror = () => ws.close();
+  }, [currentUser]);
+
+  useEffect(() => {
+    connectDashboardWs();
     return () => {
-      ws.close();
+      dashboardWsRef.current?.close();
+      if (dashboardWsReconnectRef.current) clearTimeout(dashboardWsReconnectRef.current);
+    };
+  }, [connectDashboardWs]);
+
+  // ─── Session WebSocket (active conversation messages) ─────────────────────
+
+  useEffect(() => {
+    // Tear down previous session WS
+    if (sessionWsRef.current) {
+      sessionWsRef.current.onclose = null;
+      sessionWsRef.current.close();
+      sessionWsRef.current = null;
+    }
+    if (sessionWsReconnectRef.current) {
+      clearTimeout(sessionWsReconnectRef.current);
+      sessionWsReconnectRef.current = null;
+    }
+
+    if (!selectedSessionId) return;
+
+    // Load messages from DB immediately (initial load / recovery)
+    loadActiveSession(selectedSessionId);
+
+    const connectSessionWs = () => {
+      const baseUrl = process.env.NEXT_PUBLIC_WITHOUT_API_URL
+        || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '')
+        || 'http://127.0.0.1:8005';
+      const wsUrl = baseUrl.replace(/^http/, 'ws') + `/api/ws/admin/chat/${selectedSessionId}`;
+
+      const ws = new WebSocket(wsUrl);
+      sessionWsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'message' && data.message) {
+            // Append message to active conversation — WebSocket is source of truth
+            setSelectedSession(prev => {
+              if (!prev) return prev;
+              const exists = prev.messages_json?.find(m => m.id === data.message.id);
+              if (exists) return prev;
+              return {
+                ...prev,
+                messages_json: [...(prev.messages_json || []), data.message]
+              };
+            });
+
+            // Clear unread badge for active session when admin is viewing it
+            if (data.message.sender === 'user' || data.message.sender === 'customer') {
+              chatSessionService.markRead(selectedSessionId).catch(console.error);
+            }
+          }
+        } catch (err) {
+          console.error('Session WS parse error', err);
+        }
+      };
+
+      ws.onclose = () => {
+        // On disconnect: reconnect and do a one-time recovery fetch
+        sessionWsReconnectRef.current = setTimeout(() => {
+          loadActiveSession(selectedSessionId, true); // silent catch-up
+          connectSessionWs();
+        }, 3000);
+      };
+
+      ws.onerror = () => ws.close();
+    };
+
+    connectSessionWs();
+
+    return () => {
+      if (sessionWsRef.current) {
+        sessionWsRef.current.onclose = null;
+        sessionWsRef.current.close();
+      }
+      if (sessionWsReconnectRef.current) clearTimeout(sessionWsReconnectRef.current);
     };
   }, [selectedSessionId]);
 
-  // Use a lightweight Firestore listener to get real-time updates without aggressive polling
-  useEffect(() => {
-    if (!currentUser?.uid) return;
-
-    const q = query(
-      collection(db, 'chat_sessions'),
-      where('subscriber_uid', '==', currentUser.uid),
-      where('status', '==', 'active')
-    );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      let shouldReload = false;
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === 'added' || change.type === 'modified') {
-          shouldReload = true;
-        }
-      });
-      if (shouldReload) {
-        // Silently reload the list to ensure filters/pagination are respected
-        loadSessions();
-      }
-    });
-
-    return () => unsubscribe();
-  }, [currentUser?.uid]);
-
+  // ─── Data loaders ─────────────────────────────────────────────────────────
 
   const loadDomains = async () => {
     try {
       const data = await domainService.listDomains();
       setDomains(data || []);
     } catch (e) {
-      console.error("Failed to load domains", e);
+      console.error('Failed to load domains', e);
     }
   };
 
@@ -164,8 +219,9 @@ export default function Conversations() {
       const res = await chatSessionService.listSessions(params);
       setSessions(res.data || []);
       setPagination(res.pagination || { page: 1, total_pages: 1 });
+      if (res.unreadCounts) setUnreadByTab(res.unreadCounts);
     } catch (e) {
-      console.error("Failed to load sessions", e);
+      console.error('Failed to load sessions', e);
     } finally {
       setLoading(false);
     }
@@ -177,28 +233,27 @@ export default function Conversations() {
       const res = await chatSessionService.getSession(sessionId);
       if (res?.success && res?.data) {
         setSelectedSession(res.data);
-        
-        // Update the sidebar list in memory to reflect new lead info or unread counts
-        // without having to poll the expensive list endpoint
-        setSessions(prevSessions => 
-          prevSessions.map(s => 
-            s.session_id === sessionId 
-              ? { 
-                  ...s, 
-                  customer_name: res.data.customer_name, 
+        setSessions(prevSessions =>
+          prevSessions.map(s =>
+            s.session_id === sessionId
+              ? {
+                  ...s,
+                  customer_name: res.data.customer_name,
                   last_message: res.data.last_message,
-                  unread_admin_count: res.data.unread_admin_count
-                } 
+                  unread_admin_count: 0
+                }
               : s
           )
         );
       }
     } catch (e) {
-      console.error("Failed to load active session details", e);
+      console.error('Failed to load active session details', e);
     } finally {
       if (!isSilent) setLoadingSessionDetail(false);
     }
   };
+
+  // ─── Actions ──────────────────────────────────────────────────────────────
 
   const handleSendReply = async (e) => {
     e.preventDefault();
@@ -209,10 +264,10 @@ export default function Conversations() {
       const text = replyText.trim();
       setReplyText('');
       await chatSessionService.sendAdminMessage(selectedSessionId, text);
-      // Reload list to update last message preview
-      loadSessions();
+      // The admin message will arrive via Redis → session WS → state update.
+      // No manual list reload needed.
     } catch (e) {
-      console.error("Failed to send admin reply", e);
+      console.error('Failed to send admin reply', e);
     } finally {
       setSending(false);
     }
@@ -225,9 +280,8 @@ export default function Conversations() {
     try {
       await chatSessionService.updateSession(selectedSessionId, { ai_enabled: nextVal });
       setSelectedSession(prev => ({ ...prev, ai_enabled: nextVal }));
-      loadSessions();
     } catch (e) {
-      console.error("Failed to toggle AI", e);
+      console.error('Failed to toggle AI', e);
     } finally {
       setTogglingAI(false);
     }
@@ -242,7 +296,7 @@ export default function Conversations() {
       setSelectedSessionId(null);
       setSelectedSession(null);
     } catch (e) {
-      console.error("Failed to close session", e);
+      console.error('Failed to close session', e);
     } finally {
       setClosingSession(false);
     }
@@ -258,7 +312,7 @@ export default function Conversations() {
       setSelectedSessionId(null);
       setSelectedSession(null);
     } catch (e) {
-      console.error("Failed to change spam status", e);
+      console.error('Failed to change spam status', e);
     } finally {
       setTogglingSpam(false);
     }
@@ -276,20 +330,16 @@ export default function Conversations() {
 
   const handleBulkDelete = async () => {
     if (selectedSessions.size === 0) return;
-    
-    // Custom confirm dialog if needed, or window.confirm
     if (!window.confirm(`Are you sure you want to delete ${selectedSessions.size} conversation(s)? This cannot be undone.`)) return;
 
     setDeleting(true);
     try {
       const res = await chatSessionService.bulkDelete(Array.from(selectedSessions));
-      
       if (res.details && res.details.failed && res.details.failed.length > 0) {
         showToast(`Deleted ${res.details.success?.length || 0} items, but ${res.details.failed.length} failed.`, 'error');
       } else {
         showToast(`Successfully deleted ${selectedSessions.size} conversations.`, 'success');
       }
-      
       setSelectedSessions(new Set());
       if (selectedSessions.has(selectedSessionId)) {
         setSelectedSessionId(null);
@@ -297,7 +347,7 @@ export default function Conversations() {
       }
       loadSessions();
     } catch (e) {
-      console.error("Bulk delete failed:", e);
+      console.error('Bulk delete failed:', e);
       showToast('Failed to delete selected conversations.', 'error');
     } finally {
       setDeleting(false);
@@ -322,6 +372,8 @@ export default function Conversations() {
 
   const [isSelecting, setIsSelecting] = useState(false);
 
+  // ─── Render ───────────────────────────────────────────────────────────────
+
   return (
     <div className="space-y-4 md:space-y-6 h-[calc(100vh-80px)] md:h-[calc(100vh-120px)] flex flex-col">
       <div className="flex justify-between items-center">
@@ -337,7 +389,7 @@ export default function Conversations() {
       </div>
 
       <div className="flex-1 flex flex-col lg:flex-row gap-0 lg:gap-6 overflow-hidden min-h-0">
-        
+
         {/* LEFT PANEL: SESSIONS LIST */}
         <div className={`w-full lg:w-80 bg-white rounded-xl lg:rounded-2xl flex flex-col overflow-hidden shrink-0 border border-gray-200 shadow-sm ${selectedSessionId ? 'hidden lg:flex' : 'flex'}`}>
           {/* Filters */}
@@ -349,20 +401,14 @@ export default function Conversations() {
                 placeholder="Search name/email..."
                 className="w-full bg-white border-gray-200 border border-gray-200 rounded-xl pl-9 pr-4 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500/50 transition-colors"
                 value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setPage(1);
-                }}
+                onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
               />
             </div>
 
             <select
               className="w-full bg-white border-gray-200 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500/50"
               value={selectedDomainId}
-              onChange={(e) => {
-                setSelectedDomainId(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => { setSelectedDomainId(e.target.value); setPage(1); }}
             >
               <option value="">All Domains</option>
               {domains.map(d => (
@@ -370,56 +416,58 @@ export default function Conversations() {
               ))}
             </select>
 
-            {/* Status tabs */}
             <div className="flex border-b border-gray-200 mt-2 px-1">
               {['active', 'closed', 'spam', 'all'].map((tab) => (
                 <button
                   key={tab}
                   onClick={() => { setStatusTab(tab); setPage(1); }}
-                  className={`flex-1 text-center py-2 text-xs font-bold capitalize transition-all border-b-2 ${
-                    statusTab === tab 
-                      ? 'border-blue-600 text-blue-600' 
+                  className={`relative flex-1 text-center py-2 text-xs font-bold capitalize transition-all border-b-2 ${
+                    statusTab === tab
+                      ? 'border-blue-600 text-blue-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                   }`}
                 >
                   {tab}
+                  {unreadByTab[tab] && (
+                    <span className="absolute top-2 right-2 w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                  )}
                 </button>
               ))}
             </div>
           </div>
-          
-            {/* Bulk Action Bar */}
-            {(isSelecting || selectedSessions.size > 0) && (
-              <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-100">
-                <div className="flex items-center gap-2">
-                  <button onClick={handleSelectAll} className="text-xs font-semibold text-blue-600 hover:text-blue-700">
-                    {selectedSessions.size === sessions.length && sessions.length > 0 ? 'Deselect All' : 'Select All'}
-                  </button>
-                  <span className="text-xs text-blue-400 font-medium px-2 py-0.5 bg-blue-100 rounded-full">
-                    {selectedSessions.size}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {selectedSessions.size > 0 && (
-                    <button onClick={handleBulkDelete} disabled={deleting} className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors">
-                      {deleting ? <RefreshCw size={12} className="animate-spin" /> : <Trash2 size={12} />}
-                      Delete
-                    </button>
-                  )}
-                  <button onClick={() => { setIsSelecting(false); setSelectedSessions(new Set()); }} className="text-xs font-medium text-gray-500 hover:text-gray-700 px-2 py-1">
-                    Cancel
-                  </button>
-                </div>
+
+          {/* Bulk Action Bar */}
+          {(isSelecting || selectedSessions.size > 0) && (
+            <div className="flex items-center justify-between px-4 py-2 bg-blue-50 border-b border-blue-100">
+              <div className="flex items-center gap-2">
+                <button onClick={handleSelectAll} className="text-xs font-semibold text-blue-600 hover:text-blue-700">
+                  {selectedSessions.size === sessions.length && sessions.length > 0 ? 'Deselect All' : 'Select All'}
+                </button>
+                <span className="text-xs text-blue-400 font-medium px-2 py-0.5 bg-blue-100 rounded-full">
+                  {selectedSessions.size}
+                </span>
               </div>
-            )}
-            
-            {!isSelecting && selectedSessions.size === 0 && sessions.length > 0 && (
-              <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex justify-end">
-                <button onClick={() => setIsSelecting(true)} className="text-xs font-medium text-gray-500 hover:text-gray-700 flex items-center gap-1">
-                  <CheckSquare size={12} /> Select
+              <div className="flex items-center gap-2">
+                {selectedSessions.size > 0 && (
+                  <button onClick={handleBulkDelete} disabled={deleting} className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2 py-1 rounded-lg transition-colors">
+                    {deleting ? <RefreshCw size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                    Delete
+                  </button>
+                )}
+                <button onClick={() => { setIsSelecting(false); setSelectedSessions(new Set()); }} className="text-xs font-medium text-gray-500 hover:text-gray-700 px-2 py-1">
+                  Cancel
                 </button>
               </div>
-            )}
+            </div>
+          )}
+
+          {!isSelecting && selectedSessions.size === 0 && sessions.length > 0 && (
+            <div className="px-4 py-2 bg-gray-50 border-b border-gray-200 flex justify-end">
+              <button onClick={() => setIsSelecting(true)} className="text-xs font-medium text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                <CheckSquare size={12} /> Select
+              </button>
+            </div>
+          )}
 
           {/* Sessions Stream */}
           <div className="flex-1 overflow-y-auto divide-y divide-white/5">
@@ -448,11 +496,11 @@ export default function Conversations() {
                 const isSelected = session.session_id === selectedSessionId;
                 const isChecked = selectedSessions.has(session.session_id);
                 const hasUnread = session.unread_admin_count > 0;
-                
+
                 return (
                   <div key={session.session_id} className="relative group flex items-stretch">
                     {(isSelecting || isChecked) && (
-                      <div 
+                      <div
                         className={`absolute left-0 top-0 bottom-0 w-10 flex items-center justify-center z-10 cursor-pointer transition-colors ${isChecked ? 'bg-blue-50' : 'bg-transparent hover:bg-gray-50'}`}
                         onClick={(e) => toggleSelectSession(e, session.session_id)}
                       >
@@ -468,8 +516,8 @@ export default function Conversations() {
                         }
                       }}
                       className={`w-full text-left p-4 transition-all border-l-4 flex flex-col gap-2 relative ${
-                        isSelected 
-                          ? 'bg-blue-50 border-blue-500 bg-gradient-to-r from-blue-50 to-transparent' 
+                        isSelected
+                          ? 'bg-blue-50 border-blue-500 bg-gradient-to-r from-blue-50 to-transparent'
                           : 'border-transparent hover:bg-gray-50'
                       } ${(isSelecting || isChecked) ? 'pl-10' : ''}`}
                     >
@@ -487,38 +535,36 @@ export default function Conversations() {
                         <p className="text-xs text-gray-500 truncate max-w-[200px] pr-2">
                           {session.last_message || 'No messages yet'}
                         </p>
-                      
-                      {/* Unread Badge */}
-                      {hasUnread && (
-                        <span className="w-5 h-5 rounded-full bg-blue-500 text-[10px] font-bold text-gray-900 flex items-center justify-center animate-pulse shrink-0">
-                          {session.unread_admin_count}
-                        </span>
-                      )}
-                    </div>
 
-                    {/* Status badges */}
-                    <div className="flex items-center gap-1.5 flex-wrap mt-1">
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                        session.status === 'active' || session.status === 'open' ? 'bg-emerald-100 text-emerald-400 border border-emerald-500/20' :
-                        session.status === 'spam' ? 'bg-red-100 text-gray-500 border border-red-500/20' :
-                        'bg-gray-500/10 text-gray-500 border border-slate-500/20'
-                      }`}>
-                        {session.status}
-                      </span>
-                      
-                      {session.ai_enabled && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center gap-0.5">
-                          <Bot size={8} /> AI
-                        </span>
-                      )}
+                        {hasUnread && (
+                          <span className="w-5 h-5 rounded-full bg-blue-500 text-[10px] font-bold text-gray-900 flex items-center justify-center animate-pulse shrink-0">
+                            {session.unread_admin_count}
+                          </span>
+                        )}
+                      </div>
 
-                      {session.admin_joined && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                          Live
+                      <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                          session.status === 'active' || session.status === 'open' ? 'bg-emerald-100 text-emerald-400 border border-emerald-500/20' :
+                          session.status === 'spam' ? 'bg-red-100 text-gray-500 border border-red-500/20' :
+                          'bg-gray-500/10 text-gray-500 border border-slate-500/20'
+                        }`}>
+                          {session.status}
                         </span>
-                      )}
-                    </div>
-                  </button>
+
+                        {session.ai_enabled && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase bg-blue-500/10 text-blue-400 border border-blue-500/20 flex items-center gap-0.5">
+                            <Bot size={8} /> AI
+                          </span>
+                        )}
+
+                        {session.admin_joined && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded font-bold uppercase bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                            Live
+                          </span>
+                        )}
+                      </div>
+                    </button>
                   </div>
                 );
               })
@@ -547,7 +593,7 @@ export default function Conversations() {
           )}
         </div>
 
-        {/* MIDDLE & RIGHT PANEL: ACTIVE CHAT + LEAD METADATA */}
+        {/* MIDDLE & RIGHT PANEL: ACTIVE CHAT */}
         <div className={`flex-1 bg-white rounded-xl lg:rounded-2xl flex overflow-hidden min-w-0 border border-gray-200 shadow-sm ${!selectedSessionId ? 'hidden lg:flex' : 'flex'}`}>
           {loadingSessionDetail ? (
             <div className="flex-1 flex flex-col items-center justify-center space-y-4 p-8 bg-gray-50">
@@ -556,14 +602,14 @@ export default function Conversations() {
             </div>
           ) : selectedSession ? (
             <div className="flex-1 flex flex-col lg:flex-row min-h-0">
-              
+
               {/* CHAT LOG STREAM */}
               <div className="flex-1 flex flex-col min-h-0">
                 {/* Header */}
                 <div className="p-3 md:p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
                   <div className="flex items-center gap-2">
-                    <button 
-                      onClick={() => setSelectedSessionId(null)} 
+                    <button
+                      onClick={() => setSelectedSessionId(null)}
                       className="lg:hidden p-1.5 bg-gray-200 hover:bg-gray-300 rounded-lg text-gray-700 transition-colors"
                     >
                       <span className="text-xl leading-none px-1">←</span>
@@ -609,8 +655,8 @@ export default function Conversations() {
                       onClick={handleToggleAI}
                       disabled={togglingAI}
                       className={`px-2.5 lg:px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed ${
-                        selectedSession.ai_enabled 
-                          ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' 
+                        selectedSession.ai_enabled
+                          ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30'
                           : 'bg-white border-gray-200 text-gray-500 border border-gray-200'
                       }`}
                     >
@@ -652,15 +698,13 @@ export default function Conversations() {
 
                     let dateSeparator = null;
                     const currentMsgDate = new Date(msg.timestamp || msg.created_at);
-                    const prevMsgDate = idx > 0 ? new Date(arr[idx-1].timestamp || arr[idx-1].created_at) : null;
-                    
-                    // Show separator if gap > 1 hour, or it's the first message
+                    const prevMsgDate = idx > 0 ? new Date(arr[idx - 1].timestamp || arr[idx - 1].created_at) : null;
                     const showSeparator = !prevMsgDate || (currentMsgDate - prevMsgDate > 1000 * 60 * 60);
-                    
+
                     if (showSeparator && !isNaN(currentMsgDate.getTime())) {
-                      const dateText = currentMsgDate.toLocaleDateString(undefined, { 
-                        weekday: 'short', month: 'short', day: 'numeric', 
-                        hour: '2-digit', minute: '2-digit' 
+                      const dateText = currentMsgDate.toLocaleDateString(undefined, {
+                        weekday: 'short', month: 'short', day: 'numeric',
+                        hour: '2-digit', minute: '2-digit'
                       });
                       dateSeparator = (
                         <div key={`sep-${idx}`} className="flex justify-center my-4 w-full">
@@ -714,7 +758,7 @@ export default function Conversations() {
                         </div>
                       );
                     }
-                    
+
                     return (
                       <React.Fragment key={msg.id || idx}>
                         {dateSeparator}
@@ -731,7 +775,7 @@ export default function Conversations() {
                     type="text"
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
-                    placeholder={selectedSession.ai_enabled ? "AI is responding. Type to pause AI..." : "Type reply to customer..."}
+                    placeholder={selectedSession.ai_enabled ? 'AI is responding. Type to pause AI...' : 'Type reply to customer...'}
                     className="flex-1 bg-white border-gray-200 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500/50 transition-colors"
                   />
                   <button

@@ -380,38 +380,38 @@ async def widget_chat_websocket(
         stmt = select(Domain).where(
             (Domain.widget_key == domain_id) | (Domain.id == domain_id)
         )
-    result = await db.execute(stmt)
-    domain = result.scalar_one_or_none()
+        result = await db.execute(stmt)
+        domain = result.scalar_one_or_none()
 
-    if not domain:
-        await websocket.send_json({"type": "error", "text": "Invalid domain"})
-        await websocket.close()
-        return
+        if not domain:
+            await websocket.send_json({"type": "error", "text": "Invalid domain"})
+            await websocket.close()
+            return
 
-    # Resolve fallback once per connection
-    fallback = (domain.settings or {}).get(
-        "fallback_message",
-        "Sorry, we could not find an answer. Please contact support."
-    )
-
-    # Load or create session
-    stmt_s = select(ChatSession).where(ChatSession.id == session_id)
-    res_s = await db.execute(stmt_s)
-    chat_session = res_s.scalar_one_or_none()
-    if not chat_session:
-        chat_session = ChatSession(id=session_id, domain_id=domain.id)
-        db.add(chat_session)
-        await db.commit()
-        await db.refresh(chat_session)
-
-    # Fetch and cache category_ids once per connection
-    category_ids = await redis_service.get_domain_categories(domain.id)
-    if category_ids is None:
-        cat_res = await db.execute(
-            select(DomainCategory.category_id).where(DomainCategory.domain_id == domain.id)
+        # Resolve fallback once per connection
+        fallback = (domain.settings or {}).get(
+            "fallback_message",
+            "Sorry, we could not find an answer. Please contact support."
         )
-        category_ids = list(cat_res.scalars().all())
-        asyncio.create_task(redis_service.set_domain_categories(domain.id, category_ids))
+
+        # Load or create session
+        stmt_s = select(ChatSession).where(ChatSession.id == session_id)
+        res_s = await db.execute(stmt_s)
+        chat_session = res_s.scalar_one_or_none()
+        if not chat_session:
+            chat_session = ChatSession(id=session_id, domain_id=domain.id)
+            db.add(chat_session)
+            await db.commit()
+            await db.refresh(chat_session)
+
+        # Fetch and cache category_ids once per connection
+        category_ids = await redis_service.get_domain_categories(domain.id)
+        if category_ids is None:
+            cat_res = await db.execute(
+                select(DomainCategory.category_id).where(DomainCategory.domain_id == domain.id)
+            )
+            category_ids = list(cat_res.scalars().all())
+            asyncio.create_task(redis_service.set_domain_categories(domain.id, category_ids))
 
     client_ip = websocket.client.host if websocket.client else "unknown"
 
@@ -459,6 +459,8 @@ async def widget_chat_websocket(
                 chat_session.message_count = (chat_session.message_count or 0) + 1
                 chat_session.unread_admin = (chat_session.unread_admin or 0) + 1
                 chat_session.last_message_at = datetime.datetime.utcnow()
+                if chat_session.status == "closed":
+                    chat_session.status = "open"
                 await db.commit()
                 await db.refresh(user_cm)
                 
@@ -497,346 +499,360 @@ async def widget_chat_websocket(
 
             # ── Typing indicator ───────────────────────────────────────────
             await websocket.send_json({"type": "typing"})
+            try:
 
-            # ── Normalize query ────────────────────────────────────────────
-            normalized_q = normalize_query(user_msg)
-            resolved_query = normalized_q
+                # ── Normalize query ────────────────────────────────────────────
+                normalized_q = normalize_query(user_msg)
+                resolved_query = normalized_q
 
-            # ── Generic Intent Detection (Fast-Path) ───────────────────────
-            intent = detect_intent(normalized_q)
-            if intent:
-                domain_settings = domain.settings or {}
-                if intent in ["greeting", "goodbye", "thanks", "human_request"]:
-                    if intent == "greeting":
-                        ans = domain_settings.get("welcome_message", "Hi! How can I help you today?")
-                    elif intent == "goodbye":
-                        ans = domain_settings.get("farewell_message", "Goodbye! Have a great day!")
-                    elif intent == "thanks":
-                        ans = "You're welcome! Let me know if you need anything else."
-                    elif intent == "human_request":
-                        ans = domain_settings.get("human_request_message", "Please contact our support team or use the available contact options on this website.")
+                # ── Generic Intent Detection (Fast-Path) ───────────────────────
+                intent = detect_intent(normalized_q)
+                if intent:
+                    domain_settings = domain.settings or {}
+                    if intent in ["greeting", "goodbye", "thanks", "human_request"]:
+                        if intent == "greeting":
+                            ans = domain_settings.get("welcome_message", "Hi! How can I help you today?")
+                        elif intent == "goodbye":
+                            ans = domain_settings.get("farewell_message", "Goodbye! Have a great day!")
+                        elif intent == "thanks":
+                            ans = "You're welcome! Let me know if you need anything else."
+                        elif intent == "human_request":
+                            ans = domain_settings.get("human_request_message", "Please contact our support team or use the available contact options on this website.")
                     
+                        await websocket.send_json({
+                            "type": "message",
+                            "text": ans,
+                            "sender": "ai",
+                            "source": "intent",
+                            "confidence": 1.0
+                        })
+                        asyncio.create_task(run_background_chat_updates(
+                            domain_id=domain.id,
+                            session_id=session_id,
+                            user_msg=user_msg,
+                            ai_msg=ans,
+                            failure_reason=None,
+                            q_hash=None,
+                            query_vector=None
+                        ))
+                        continue
+                    
+                    elif intent in ["bot_identity", "capabilities"]:
+                        bot_name = domain_settings.get("bot_name", "SHI Chatbot")
+                        bot_desc = domain_settings.get("bot_description", "An AI assistant that helps visitors using the knowledge base.")
+                        sys_prompt = f"Bot Name: {bot_name}\nBot Description: {bot_desc}\nRespond naturally in 1-2 sentences using the above details."
+                    
+                        full_answer = ""
+                        try:
+                            await websocket.send_json({"type": "stream_delta", "text": ""})
+                            async for token in ollama_service.generate_response_stream(system_prompt=sys_prompt, user_query=user_msg):
+                                if token:
+                                    full_answer += token
+                                    await websocket.send_json({"type": "stream_delta", "text": token})
+                            await websocket.send_json({"type": "stream_done"})
+                            full_answer = _strip_preamble(full_answer)
+                        except Exception as e:
+                            logger.error(f"Intent LLM error: {e}")
+                            full_answer = "I am an AI assistant. How can I help you?"
+                            await websocket.send_json({
+                                "type": "message",
+                                "text": full_answer,
+                                "sender": "ai",
+                                "source": "intent",
+                                "confidence": 1.0
+                            })
+                        
+                        asyncio.create_task(run_background_chat_updates(
+                            domain_id=domain.id,
+                            session_id=session_id,
+                            user_msg=user_msg,
+                            ai_msg=full_answer,
+                            failure_reason=None,
+                            q_hash=None,
+                            query_vector=None
+                        ))
+                        continue
+
+                # Exclude the message we just saved
+                history_msgs = [m for m in recent_messages if m.id != user_cm.id]
+
+                # ── FIX #7: context-aware query rewriting ──────────────────────
+                # Only rewrite when query is short or contains pronouns/follow-ups.
+                # Only use successful prior exchanges (skip fallback responses).
+                if history_msgs:
+                    words = set(normalized_q.lower().split())
+                    is_short = len(words) <= 4
+                    has_followup = bool(words & _FOLLOWUP_WORDS)
+
+                    if is_short or has_followup:
+                        good_pairs = []
+                        current_pair: dict = {}
+                        for m in history_msgs:
+                            if m.sender == "user":
+                                current_pair = {"user": m.message}
+                            elif m.sender == "bot" and "user" in current_pair:
+                                ai_text = m.message
+                                # Skip fallback turns — they add noise not signal
+                                if (
+                                    "don't have enough information" not in ai_text.lower()
+                                    and fallback.lower() not in ai_text.lower()
+                                ):
+                                    current_pair["ai"] = ai_text
+                                    good_pairs.append(current_pair)
+                                current_pair = {}
+
+                        if good_pairs:
+                            try:
+                                resolved_query = await ollama_service.rewrite_query(good_pairs, normalized_q)
+                                logger.info(f"Query rewrite: '{normalized_q}' → '{resolved_query}'")
+                            except Exception as rw_err:
+                                logger.error(f"Query rewrite failed: {rw_err}")
+                                resolved_query = normalized_q
+
+                # ── Cache key uses resolved query ──────────────────────────────
+                q_hash = hashlib.md5(resolved_query.encode()).hexdigest()
+                cache_key = f"chat:{domain.id}:{q_hash}"
+
+                # ── Answer cache (exact match) ──────────────────────────────────
+                cached_response = await redis_service.get_cached_response(cache_key)
+                if cached_response:
+                    cached_answer = cached_response.get("answer", "")
                     await websocket.send_json({
                         "type": "message",
-                        "text": ans,
+                        "text": cached_answer,
                         "sender": "ai",
-                        "source": "intent",
+                        "source": "cache",
                         "confidence": 1.0
                     })
                     asyncio.create_task(run_background_chat_updates(
                         domain_id=domain.id,
                         session_id=session_id,
                         user_msg=user_msg,
-                        ai_msg=ans,
-                        failure_reason=None,
-                        q_hash=None,
-                        query_vector=None
+                        ai_msg=cached_answer
                     ))
                     continue
-                    
-                elif intent in ["bot_identity", "capabilities"]:
-                    bot_name = domain_settings.get("bot_name", "SHI Chatbot")
-                    bot_desc = domain_settings.get("bot_description", "An AI assistant that helps visitors using the knowledge base.")
-                    sys_prompt = f"Bot Name: {bot_name}\nBot Description: {bot_desc}\nRespond naturally in 1-2 sentences using the above details."
-                    
-                    full_answer = ""
+
+                # ── Embedding cache ────────────────────────────────────────────
+                query_vector = await redis_service.get_cached_embedding(q_hash)
+                need_cache_embedding = False
+                if not query_vector:
                     try:
-                        async for token in ollama_service.generate_response_stream(system_prompt=sys_prompt, user_query=user_msg):
-                            if token:
-                                full_answer += token
-                                await websocket.send_json({"type": "stream_delta", "text": token})
-                        await websocket.send_json({"type": "stream_done"})
-                        full_answer = _strip_preamble(full_answer)
+                        query_vector = await ollama_service.generate_embedding(resolved_query)
+                        need_cache_embedding = True
+                    except Exception as embed_err:
+                        logger.error(f"Embedding error: {embed_err}")
+                        await websocket.send_json({"type": "error", "text": "Failed to process query."})
+                        continue
+
+                # ── FIX #8: parallel Qdrant + FTS search ───────────────────────
+                async def _qdrant():
+                    try:
+                        return await qdrant_service.search_chunks(
+                            tenant_id=domain.organization_id,
+                            query_vector=query_vector,
+                            category_ids=category_ids,
+                            domain_id=domain.id,
+                            limit=3
+                        )
                     except Exception as e:
-                        logger.error(f"Intent LLM error: {e}")
-                        full_answer = "I am an AI assistant. How can I help you?"
-                        await websocket.send_json({
-                            "type": "message",
-                            "text": full_answer,
-                            "sender": "ai",
-                            "source": "intent",
-                            "confidence": 1.0
-                        })
-                        
+                        logger.error(f"Qdrant search error: {e}")
+                        return []
+
+                async def _fts():
+                    try:
+                        return await search_faqs_fts(search_db, domain.id, resolved_query, limit=3)
+                    except Exception as e:
+                        logger.error(f"FTS search error: {e}")
+                        return []
+
+                async with AsyncSessionLocal() as search_db:
+                    qdrant_chunks, fts_chunks = await asyncio.gather(
+                        _qdrant(),
+                        _fts()
+                    )
+
+                # Merge: FTS first (exact keyword wins), then semantic
+                seen = set()
+                top_chunks = []
+                for chunk in fts_chunks + qdrant_chunks:
+                    p = chunk.get("payload", {})
+                    key = (p.get("question") or p.get("text", ""))[:100].lower()
+                    if key not in seen:
+                        seen.add(key)
+                        top_chunks.append(chunk)
+
+                top_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
+                top_chunks = top_chunks[:5]
+
+                # ── No match ───────────────────────────────────────────────────
+                if not top_chunks:
+                    logger.info({"event": "NO_MATCH", "question": user_msg, "resolved": resolved_query})
+                    await websocket.send_json({
+                        "type": "message",
+                        "text": fallback,
+                        "sender": "ai",
+                        "source": "fallback",
+                        "confidence": 0.0
+                    })
                     asyncio.create_task(run_background_chat_updates(
                         domain_id=domain.id,
                         session_id=session_id,
                         user_msg=user_msg,
-                        ai_msg=full_answer,
-                        failure_reason=None,
-                        q_hash=None,
-                        query_vector=None
+                        ai_msg=fallback,
+                        failure_reason="NO_MATCH",
+                        q_hash=q_hash if need_cache_embedding else None,
+                        query_vector=query_vector if need_cache_embedding else None
                     ))
                     continue
 
-            # Exclude the message we just saved
-            history_msgs = [m for m in recent_messages if m.id != user_cm.id]
+                max_score = top_chunks[0].get("score", 0)
 
-            # ── FIX #7: context-aware query rewriting ──────────────────────
-            # Only rewrite when query is short or contains pronouns/follow-ups.
-            # Only use successful prior exchanges (skip fallback responses).
-            if history_msgs:
-                words = set(normalized_q.lower().split())
-                is_short = len(words) <= 4
-                has_followup = bool(words & _FOLLOWUP_WORDS)
+                # ── Fast path ≥ 0.95 ───────────────────────────────────────────
+                if max_score >= 0.95:
+                    fast_answer = top_chunks[0].get("payload", {}).get("answer")
+                    if fast_answer:
+                        logger.info({
+                            "event": "FAST_PATH",
+                            "question": user_msg,
+                            "resolved": resolved_query,
+                            "score": max_score,
+                            "matched": top_chunks[0].get("payload", {}).get("question")
+                        })
+                        await websocket.send_json({
+                            "type": "message",
+                            "text": fast_answer,
+                            "sender": "ai",
+                            "source": "faq",
+                            "confidence": max_score
+                        })
+                        asyncio.create_task(run_background_chat_updates(
+                            domain_id=domain.id,
+                            session_id=session_id,
+                            user_msg=user_msg,
+                            ai_msg=fast_answer,
+                            cache_key=cache_key,
+                            q_hash=q_hash if need_cache_embedding else None,
+                            query_vector=query_vector if need_cache_embedding else None
+                        ))
+                        continue
 
-                if is_short or has_followup:
-                    good_pairs = []
-                    current_pair: dict = {}
-                    for m in history_msgs:
-                        if m.sender == "user":
-                            current_pair = {"user": m.message}
-                        elif m.sender == "bot" and "user" in current_pair:
-                            ai_text = m.message
-                            # Skip fallback turns — they add noise not signal
-                            if (
-                                "don't have enough information" not in ai_text.lower()
-                                and fallback.lower() not in ai_text.lower()
-                            ):
-                                current_pair["ai"] = ai_text
-                                good_pairs.append(current_pair)
-                            current_pair = {}
-
-                    if good_pairs:
-                        try:
-                            resolved_query = await ollama_service.rewrite_query(good_pairs, normalized_q)
-                            logger.info(f"Query rewrite: '{normalized_q}' → '{resolved_query}'")
-                        except Exception as rw_err:
-                            logger.error(f"Query rewrite failed: {rw_err}")
-                            resolved_query = normalized_q
-
-            # ── Cache key uses resolved query ──────────────────────────────
-            q_hash = hashlib.md5(resolved_query.encode()).hexdigest()
-            cache_key = f"chat:{domain.id}:{q_hash}"
-
-            # ── Answer cache (exact match) ──────────────────────────────────
-            cached_response = await redis_service.get_cached_response(cache_key)
-            if cached_response:
-                cached_answer = cached_response.get("answer", "")
-                await websocket.send_json({
-                    "type": "message",
-                    "text": cached_answer,
-                    "sender": "ai",
-                    "source": "cache",
-                    "confidence": 1.0
-                })
-                asyncio.create_task(run_background_chat_updates(
-                    domain_id=domain.id,
-                    session_id=session_id,
-                    user_msg=user_msg,
-                    ai_msg=cached_answer
-                ))
-                continue
-
-            # ── Embedding cache ────────────────────────────────────────────
-            query_vector = await redis_service.get_cached_embedding(q_hash)
-            need_cache_embedding = False
-            if not query_vector:
-                try:
-                    query_vector = await ollama_service.generate_embedding(resolved_query)
-                    need_cache_embedding = True
-                except Exception as embed_err:
-                    logger.error(f"Embedding error: {embed_err}")
-                    await websocket.send_json({"type": "error", "text": "Failed to process query."})
-                    continue
-
-            # ── FIX #8: parallel Qdrant + FTS search ───────────────────────
-            async def _qdrant():
-                try:
-                    return await qdrant_service.search_chunks(
-                        tenant_id=domain.organization_id,
-                        query_vector=query_vector,
-                        category_ids=category_ids,
-                        domain_id=domain.id,
-                        limit=3
-                    )
-                except Exception as e:
-                    logger.error(f"Qdrant search error: {e}")
-                    return []
-
-            async with AsyncSessionLocal() as search_db:
-                qdrant_chunks, fts_chunks = await asyncio.gather(
-                    _qdrant(),
-                    search_faqs_fts(search_db, domain.id, resolved_query, limit=3)
-                )
-
-            # Merge: FTS first (exact keyword wins), then semantic
-            seen = set()
-            top_chunks = []
-            for chunk in fts_chunks + qdrant_chunks:
-                p = chunk.get("payload", {})
-                key = (p.get("question") or p.get("text", ""))[:100].lower()
-                if key not in seen:
-                    seen.add(key)
-                    top_chunks.append(chunk)
-
-            top_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
-            top_chunks = top_chunks[:5]
-
-            # ── No match ───────────────────────────────────────────────────
-            if not top_chunks:
-                logger.info({"event": "NO_MATCH", "question": user_msg, "resolved": resolved_query})
-                await websocket.send_json({
-                    "type": "message",
-                    "text": fallback,
-                    "sender": "ai",
-                    "source": "fallback",
-                    "confidence": 0.0
-                })
-                asyncio.create_task(run_background_chat_updates(
-                    domain_id=domain.id,
-                    session_id=session_id,
-                    user_msg=user_msg,
-                    ai_msg=fallback,
-                    failure_reason="NO_MATCH",
-                    q_hash=q_hash if need_cache_embedding else None,
-                    query_vector=query_vector if need_cache_embedding else None
-                ))
-                continue
-
-            max_score = top_chunks[0].get("score", 0)
-
-            # ── Fast path ≥ 0.95 ───────────────────────────────────────────
-            if max_score >= 0.95:
-                fast_answer = top_chunks[0].get("payload", {}).get("answer")
-                if fast_answer:
+                # ── Early exit < 0.60 ──────────────────────────────────────────
+                if max_score < 0.60:
                     logger.info({
-                        "event": "FAST_PATH",
+                        "event": "LOW_CONFIDENCE",
                         "question": user_msg,
                         "resolved": resolved_query,
-                        "score": max_score,
-                        "matched": top_chunks[0].get("payload", {}).get("question")
+                        "score": max_score
                     })
                     await websocket.send_json({
                         "type": "message",
-                        "text": fast_answer,
+                        "text": fallback,
                         "sender": "ai",
-                        "source": "faq",
+                        "source": "fallback",
                         "confidence": max_score
                     })
                     asyncio.create_task(run_background_chat_updates(
                         domain_id=domain.id,
                         session_id=session_id,
                         user_msg=user_msg,
-                        ai_msg=fast_answer,
-                        cache_key=cache_key,
+                        ai_msg=fallback,
+                        failure_reason="LOW_CONFIDENCE",
                         q_hash=q_hash if need_cache_embedding else None,
                         query_vector=query_vector if need_cache_embedding else None
                     ))
                     continue
 
-            # ── Early exit < 0.60 ──────────────────────────────────────────
-            if max_score < 0.60:
-                logger.info({
-                    "event": "LOW_CONFIDENCE",
-                    "question": user_msg,
-                    "resolved": resolved_query,
-                    "score": max_score
-                })
-                await websocket.send_json({
-                    "type": "message",
-                    "text": fallback,
-                    "sender": "ai",
-                    "source": "fallback",
-                    "confidence": max_score
-                })
-                asyncio.create_task(run_background_chat_updates(
-                    domain_id=domain.id,
-                    session_id=session_id,
-                    user_msg=user_msg,
-                    ai_msg=fallback,
-                    failure_reason="LOW_CONFIDENCE",
-                    q_hash=q_hash if need_cache_embedding else None,
-                    query_vector=query_vector if need_cache_embedding else None
-                ))
-                continue
+                # ── LLM RAG path (0.60 – 0.95) ────────────────────────────────
 
-            # ── LLM RAG path (0.60 – 0.95) ────────────────────────────────
+                # FIX #9: build context from answer field, not raw Q:A text blob
+                context_parts = []
+                for chunk in top_chunks:
+                    p = chunk.get("payload", {})
+                    if "answer" in p:
+                        # Use structured Q+A for richest context
+                        context_parts.append(f"Q: {p.get('question', '')}\nA: {p['answer']}")
+                    else:
+                        text = p.get("text", "")
+                        context_parts.append(text)
+                context_text = "\n\n".join(context_parts)
 
-            # FIX #9: build context from answer field, not raw Q:A text blob
-            context_parts = []
-            for chunk in top_chunks:
-                p = chunk.get("payload", {})
-                if "answer" in p:
-                    # Use structured Q+A for richest context
-                    context_parts.append(f"Q: {p.get('question', '')}\nA: {p['answer']}")
-                else:
-                    text = p.get("text", "")
-                    context_parts.append(text)
-            context_text = "\n\n".join(context_parts)
+                # Build prompt with summary + recent history
+                prompt_parts = []
+                if chat_summary:
+                    prompt_parts.append(f"Conversation summary so far:\n{chat_summary}")
 
-            # Build prompt with summary + recent history
-            prompt_parts = []
-            if chat_summary:
-                prompt_parts.append(f"Conversation summary so far:\n{chat_summary}")
+                if history_msgs:
+                    hist_lines = []
+                    for m in history_msgs[-6:]:  # last 3 turns = 6 messages
+                        role = "User" if m.sender == "user" else "Assistant"
+                        hist_lines.append(f"{role}: {m.message}")
+                    prompt_parts.append("Recent conversation:\n" + "\n".join(hist_lines))
 
-            if history_msgs:
-                hist_lines = []
-                for m in history_msgs[-6:]:  # last 3 turns = 6 messages
-                    role = "User" if m.sender == "user" else "Assistant"
-                    hist_lines.append(f"{role}: {m.message}")
-                prompt_parts.append("Recent conversation:\n" + "\n".join(hist_lines))
+                prompt_parts.append(f"Knowledge base:\n{context_text}")
+                prompt_context = "\n\n".join(prompt_parts)
 
-            prompt_parts.append(f"Knowledge base:\n{context_text}")
-            prompt_context = "\n\n".join(prompt_parts)
+                system_prompt = (
+                    f"You are a helpful AI assistant for {domain.domain_name}.\n"
+                    f"Answer using ONLY the information in the Knowledge base below.\n"
+                    f"Be extremely brief and concise. Do not add any conversational filler or extra details.\n"
+                    f"You may fix obvious spelling mistakes in the user's question.\n"
+                    f"If the Knowledge base does not contain the answer, reply EXACTLY with:\n"
+                    f"\"{fallback}\"\n"
+                    f"Do not guess or use outside knowledge.\n\n"
+                    f"{prompt_context}"
+                )
 
-            system_prompt = (
-                f"You are a helpful AI assistant for {domain.domain_name}.\n"
-                f"Answer using ONLY the information in the Knowledge base below.\n"
-                f"Be extremely brief and concise. Do not add any conversational filler or extra details.\n"
-                f"You may fix obvious spelling mistakes in the user's question.\n"
-                f"If the Knowledge base does not contain the answer, reply EXACTLY with:\n"
-                f"\"{fallback}\"\n"
-                f"Do not guess or use outside knowledge.\n\n"
-                f"{prompt_context}"
-            )
+                # ── Stream tokens ──────────────────────────────────────────────
+                full_answer = ""
+                try:
+                    await websocket.send_json({"type": "stream_delta", "text": ""})
+                    async for token in ollama_service.generate_response_stream(
+                        system_prompt=system_prompt,
+                        user_query=user_msg
+                    ):
+                        if token:
+                            full_answer += token
+                            await websocket.send_json({"type": "stream_delta", "text": token})
 
-            # ── Stream tokens ──────────────────────────────────────────────
-            full_answer = ""
-            try:
-                async for token in ollama_service.generate_response_stream(
-                    system_prompt=system_prompt,
-                    user_query=user_msg
-                ):
-                    if token:
-                        full_answer += token
-                        await websocket.send_json({"type": "stream_delta", "text": token})
+                    await websocket.send_json({"type": "stream_done"})
+                    full_answer = _strip_preamble(full_answer)
 
-                await websocket.send_json({"type": "stream_done"})
-                full_answer = _strip_preamble(full_answer)
+                    failure_reason = None
+                    if (
+                        fallback.lower() in full_answer.lower()
+                        or "i don't have enough information" in full_answer.lower()
+                    ):
+                        failure_reason = "LLM_FAILURE"
+                        display_answer = fallback
+                    else:
+                        display_answer = full_answer
 
-                failure_reason = None
-                if (
-                    fallback.lower() in full_answer.lower()
-                    or "i don't have enough information" in full_answer.lower()
-                ):
-                    failure_reason = "LLM_FAILURE"
-                    display_answer = fallback
-                else:
-                    display_answer = full_answer
+                    logger.info({
+                        "event": failure_reason or "LLM_PATH",
+                        "question": user_msg,
+                        "resolved": resolved_query,
+                        "score": max_score,
+                        "matched": top_chunks[0].get("payload", {}).get("question")
+                    })
 
-                logger.info({
-                    "event": failure_reason or "LLM_PATH",
-                    "question": user_msg,
-                    "resolved": resolved_query,
-                    "score": max_score,
-                    "matched": top_chunks[0].get("payload", {}).get("question")
-                })
+                    asyncio.create_task(run_background_chat_updates(
+                        domain_id=domain.id,
+                        session_id=session_id,
+                        user_msg=user_msg,
+                        ai_msg=display_answer,
+                        failure_reason=failure_reason,
+                        cache_key=cache_key if not failure_reason else None,
+                        q_hash=q_hash if need_cache_embedding else None,
+                        query_vector=query_vector if need_cache_embedding else None
+                    ))
 
-                asyncio.create_task(run_background_chat_updates(
-                    domain_id=domain.id,
-                    session_id=session_id,
-                    user_msg=user_msg,
-                    ai_msg=display_answer,
-                    failure_reason=failure_reason,
-                    cache_key=cache_key if not failure_reason else None,
-                    q_hash=q_hash if need_cache_embedding else None,
-                    query_vector=query_vector if need_cache_embedding else None
-                ))
+                except Exception as stream_err:
+                    logger.error(f"Ollama streaming error: {stream_err}")
+                    await websocket.send_json({"type": "error", "text": "AI response error. Please try again."})
 
-            except Exception as stream_err:
-                logger.error(f"Ollama streaming error: {stream_err}")
-                await websocket.send_json({"type": "error", "text": "AI response error. Please try again."})
+            except Exception as loop_err:
+                logger.error(f"Unexpected error processing message: {loop_err}")
+                await websocket.send_json({"type": "error", "text": "An unexpected error occurred. Please try again."})
 
     except WebSocketDisconnect:
         logger.info(f"WS disconnected: session={session_id}")
