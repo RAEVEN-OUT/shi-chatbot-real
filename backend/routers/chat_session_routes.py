@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy import update
+from sqlalchemy import update, text as sql_text
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from pydantic import BaseModel
@@ -51,7 +51,7 @@ async def list_sessions(
     latest_msg_sub = (
         select(ChatMessage.message)
         .where(ChatMessage.session_id == ChatSession.id)
-        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+        .order_by(ChatMessage.sequence.desc())
         .limit(1)
         .correlate(ChatSession)
         .scalar_subquery()
@@ -132,9 +132,11 @@ async def get_session(
                 "sender": m.sender,
                 "message": m.message,
                 "type": m.type,
+                "sequence": m.sequence,
+                "status": m.status,
                 "created_at": m.created_at
             }
-            for m in sorted(session.messages, key=lambda x: x.created_at)
+            for m in sorted(session.messages, key=lambda x: x.sequence)
         ]
     }
 
@@ -152,11 +154,16 @@ async def send_message(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
         
+    seq_res = await db.execute(sql_text("UPDATE chat_sessions SET next_sequence = next_sequence + 1 WHERE id = :id RETURNING next_sequence"), {"id": session.id})
+    seq_val = seq_res.scalar()
+    
     msg = ChatMessage(
         session_id=session.id,
         sender=data.sender,
         message=data.message,
-        type=data.type
+        type=data.type,
+        sequence=seq_val,
+        status="completed"
     )
     db.add(msg)
     
@@ -180,6 +187,8 @@ async def send_message(
             "sender": msg.sender,
             "message": msg.message,
             "type": msg.type,
+            "sequence": msg.sequence,
+            "status": msg.status,
             "created_at": msg.created_at.isoformat() if msg.created_at else datetime.datetime.utcnow().isoformat()
         }
     }

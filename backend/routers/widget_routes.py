@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, Request, WebSocke
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy import text as sql_text
 from typing import Optional
 from pydantic import BaseModel
 import datetime
@@ -179,7 +180,7 @@ async def get_history(
     if not chat_session:
         return {"messages": [], "has_more": False}
 
-    messages = sorted(chat_session.messages, key=lambda m: m.created_at, reverse=True)
+    messages = sorted(chat_session.messages, key=lambda m: m.sequence, reverse=True)
 
     # FIX #4: correct message pairing logic (was using reversed list indexing wrongly)
     formatted = []
@@ -230,7 +231,7 @@ async def get_widget_session(
     chat_session.unread_customer = 0
     await db.commit()
 
-    messages = sorted(chat_session.messages, key=lambda m: m.created_at)
+    messages = sorted(chat_session.messages, key=lambda m: m.sequence)
     messages_json = [
         {
             "sender": "customer" if m.sender == "user" else m.sender,
@@ -270,7 +271,9 @@ async def run_background_chat_updates(
         async with AsyncSessionLocal() as db:
             ai_cm = None
             if ai_msg:
-                ai_cm = ChatMessage(session_id=session_id, sender="bot", message=ai_msg)
+                seq_res = await db.execute(sql_text("UPDATE chat_sessions SET next_sequence = next_sequence + 1 WHERE id = :id RETURNING next_sequence"), {"id": session_id})
+                seq_val = seq_res.scalar()
+                ai_cm = ChatMessage(session_id=session_id, sender="bot", message=ai_msg, sequence=seq_val, status="completed")
                 db.add(ai_cm)
 
                 stmt = select(ChatSession).where(ChatSession.id == session_id)
@@ -292,7 +295,7 @@ async def run_background_chat_updates(
                         msg_res = await db.execute(
                             select(ChatMessage)
                             .where(ChatMessage.session_id == session_id)
-                            .order_by(ChatMessage.created_at.asc())
+                            .order_by(ChatMessage.sequence.asc())
                         )
                         all_msgs = msg_res.scalars().all()
                         convo = "\n".join([
@@ -331,6 +334,8 @@ async def run_background_chat_updates(
                         "sender": "bot",
                         "message": ai_cm.message,
                         "type": "text",
+                        "sequence": ai_cm.sequence,
+                        "status": ai_cm.status,
                         "created_at": ai_cm.created_at.isoformat() if ai_cm.created_at else datetime.datetime.utcnow().isoformat()
                     }
                 }
@@ -365,16 +370,16 @@ _FOLLOWUP_WORDS = {
 async def widget_chat_websocket(
     websocket: WebSocket,
     domain_id: str,
-    session_id: str,
-    db: AsyncSession = Depends(get_db)
+    session_id: str
 ):
     await manager.connect(websocket, session_id, role="widget")
 
-    # FIX #6: accept both widget_key and domain UUID so the JS client works
-    # regardless of which value it sends as domain_id query param
-    stmt = select(Domain).where(
-        (Domain.widget_key == domain_id) | (Domain.id == domain_id)
-    )
+    async with AsyncSessionLocal() as db:
+        # FIX #6: accept both widget_key and domain UUID so the JS client works
+        # regardless of which value it sends as domain_id query param
+        stmt = select(Domain).where(
+            (Domain.widget_key == domain_id) | (Domain.id == domain_id)
+        )
     result = await db.execute(stmt)
     domain = result.scalar_one_or_none()
 
@@ -399,14 +404,14 @@ async def widget_chat_websocket(
         await db.commit()
         await db.refresh(chat_session)
 
-    # Fetch and cache category_ids once per connection
-    category_ids = await redis_service.get_domain_categories(domain.id)
-    if category_ids is None:
-        cat_res = await db.execute(
-            select(DomainCategory.category_id).where(DomainCategory.domain_id == domain.id)
-        )
-        category_ids = list(cat_res.scalars().all())
-        asyncio.create_task(redis_service.set_domain_categories(domain.id, category_ids))
+        # Fetch and cache category_ids once per connection
+        category_ids = await redis_service.get_domain_categories(domain.id)
+        if category_ids is None:
+            cat_res = await db.execute(
+                select(DomainCategory.category_id).where(DomainCategory.domain_id == domain.id)
+            )
+            category_ids = list(cat_res.scalars().all())
+            asyncio.create_task(redis_service.set_domain_categories(domain.id, category_ids))
 
     client_ip = websocket.client.host if websocket.client else "unknown"
 
@@ -439,21 +444,38 @@ async def widget_chat_websocket(
                 await websocket.send_json({"type": "error", "text": "Too many requests. Please wait a moment."})
                 continue
 
-            # ── Re-fetch session state (admin may have toggled ai_enabled) ─
-            res_s2 = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
-            chat_session = res_s2.scalar_one_or_none()
-            if not chat_session:
-                chat_session = ChatSession(id=session_id, domain_id=domain.id)
-                db.add(chat_session)
+            # ── Re-fetch session state and update DB ───────────────────────
+            async with AsyncSessionLocal() as db:
+                res_s2 = await db.execute(select(ChatSession).where(ChatSession.id == session_id))
+                chat_session = res_s2.scalar_one_or_none()
+                if not chat_session:
+                    chat_session = ChatSession(id=session_id, domain_id=domain.id)
+                    db.add(chat_session)
 
-            # ── Save user message immediately ──────────────────────────────
-            user_cm = ChatMessage(session_id=session_id, sender="user", message=user_msg)
-            db.add(user_cm)
-            chat_session.message_count = (chat_session.message_count or 0) + 1
-            chat_session.unread_admin = (chat_session.unread_admin or 0) + 1
-            chat_session.last_message_at = datetime.datetime.utcnow()
-            await db.commit()
-            await db.refresh(user_cm)
+                seq_res = await db.execute(sql_text("UPDATE chat_sessions SET next_sequence = next_sequence + 1 WHERE id = :id RETURNING next_sequence"), {"id": session_id})
+                seq_val = seq_res.scalar()
+                user_cm = ChatMessage(session_id=session_id, sender="user", message=user_msg, sequence=seq_val, status="completed")
+                db.add(user_cm)
+                chat_session.message_count = (chat_session.message_count or 0) + 1
+                chat_session.unread_admin = (chat_session.unread_admin or 0) + 1
+                chat_session.last_message_at = datetime.datetime.utcnow()
+                await db.commit()
+                await db.refresh(user_cm)
+                
+                ai_active = (
+                    chat_session.status == "open"
+                    and chat_session.ai_enabled
+                    and not chat_session.admin_joined
+                )
+                chat_summary = chat_session.summary
+                
+                mem_res = await db.execute(
+                    select(ChatMessage)
+                    .where(ChatMessage.session_id == session_id)
+                    .order_by(ChatMessage.sequence.desc())
+                    .limit(8)
+                )
+                recent_messages = list(reversed(mem_res.scalars().all()))
             
             user_payload = {
                 "type": "message",
@@ -463,16 +485,13 @@ async def widget_chat_websocket(
                     "sender": "user",
                     "message": user_cm.message,
                     "type": "text",
+                    "sequence": user_cm.sequence,
+                    "status": user_cm.status,
                     "created_at": user_cm.created_at.isoformat() if user_cm.created_at else datetime.datetime.utcnow().isoformat()
                 }
             }
             await redis_service.publish_message(f"chat:{session_id}", user_payload)
 
-            ai_active = (
-                chat_session.status == "open"
-                and chat_session.ai_enabled
-                and not chat_session.admin_joined
-            )
             if not ai_active:
                 continue
 
@@ -550,14 +569,6 @@ async def widget_chat_websocket(
                     ))
                     continue
 
-            # ── Fetch recent history for context rewriting ─────────────────
-            mem_res = await db.execute(
-                select(ChatMessage)
-                .where(ChatMessage.session_id == session_id)
-                .order_by(ChatMessage.created_at.desc())
-                .limit(8)
-            )
-            recent_messages = list(reversed(mem_res.scalars().all()))
             # Exclude the message we just saved
             history_msgs = [m for m in recent_messages if m.id != user_cm.id]
 
@@ -643,10 +654,11 @@ async def widget_chat_websocket(
                     logger.error(f"Qdrant search error: {e}")
                     return []
 
-            qdrant_chunks, fts_chunks = await asyncio.gather(
-                _qdrant(),
-                search_faqs_fts(db, domain.id, resolved_query, limit=3)
-            )
+            async with AsyncSessionLocal() as search_db:
+                qdrant_chunks, fts_chunks = await asyncio.gather(
+                    _qdrant(),
+                    search_faqs_fts(search_db, domain.id, resolved_query, limit=3)
+                )
 
             # Merge: FTS first (exact keyword wins), then semantic
             seen = set()
@@ -755,8 +767,8 @@ async def widget_chat_websocket(
 
             # Build prompt with summary + recent history
             prompt_parts = []
-            if chat_session.summary:
-                prompt_parts.append(f"Conversation summary so far:\n{chat_session.summary}")
+            if chat_summary:
+                prompt_parts.append(f"Conversation summary so far:\n{chat_summary}")
 
             if history_msgs:
                 hist_lines = []

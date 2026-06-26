@@ -122,6 +122,7 @@ class ChatSession(Base):
     last_message_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    next_sequence = Column(Integer, nullable=False, server_default="0", default=0)
     
     __table_args__ = (
         Index('ix_chat_sessions_domain_id_status', 'domain_id', 'status', text('last_message_at DESC')),
@@ -139,6 +140,8 @@ class ChatMessage(Base):
     sender = Column(String) # user, bot, admin
     message = Column(String)
     type = Column(String, default="text") # text, system
+    sequence = Column(Integer, nullable=False)
+    status = Column(String(20), default="completed")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     __table_args__ = (
