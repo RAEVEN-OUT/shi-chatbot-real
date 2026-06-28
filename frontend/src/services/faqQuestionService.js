@@ -18,7 +18,7 @@ export const faqQuestionService = {
     return res.data;
   },
   bulkDeleteQuestions: async (ids) => {
-    const res = await api.post('/faq-questions/bulk-delete', { ids });
+    const res = await api.post('/faq-questions/bulk-delete', { question_ids: ids });
     return res.data;
   },
   // Backward compatibility CRUD

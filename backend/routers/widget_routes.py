@@ -461,6 +461,8 @@ async def widget_chat_websocket(
                 chat_session.last_message_at = datetime.datetime.utcnow()
                 if chat_session.status == "closed":
                     chat_session.status = "open"
+                    chat_session.ai_enabled = True
+                    chat_session.admin_joined = False
                 await db.commit()
                 await db.refresh(user_cm)
                 

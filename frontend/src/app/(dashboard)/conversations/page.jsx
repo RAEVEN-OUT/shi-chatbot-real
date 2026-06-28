@@ -53,6 +53,7 @@ export default function Conversations() {
   const sessionWsRef = useRef(null);
   const dashboardWsReconnectRef = useRef(null);
   const sessionWsReconnectRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
 
   // ─── Initial data load ────────────────────────────────────────────────────
 
@@ -261,6 +262,14 @@ export default function Conversations() {
     e.preventDefault();
     if (!replyText.trim() || sending || !selectedSessionId) return;
 
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    if (sessionWsRef.current?.readyState === WebSocket.OPEN) {
+      sessionWsRef.current.send(JSON.stringify({ type: 'typing_stopped' }));
+    }
+
     setSending(true);
     try {
       const text = replyText.trim();
@@ -282,6 +291,13 @@ export default function Conversations() {
     try {
       await chatSessionService.updateSession(selectedSessionId, { ai_enabled: nextVal });
       setSelectedSession(prev => ({ ...prev, ai_enabled: nextVal }));
+      setSessions(prevSessions =>
+        prevSessions.map(s =>
+          s.session_id === selectedSessionId
+            ? { ...s, ai_enabled: nextVal }
+            : s
+        )
+      );
     } catch (e) {
       console.error('Failed to toggle AI', e);
     } finally {
@@ -776,7 +792,18 @@ export default function Conversations() {
                   <input
                     type="text"
                     value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
+                    onChange={(e) => {
+                      setReplyText(e.target.value);
+                      if (sessionWsRef.current?.readyState === WebSocket.OPEN) {
+                        sessionWsRef.current.send(JSON.stringify({ type: 'typing_started' }));
+                        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+                        typingTimeoutRef.current = setTimeout(() => {
+                          if (sessionWsRef.current?.readyState === WebSocket.OPEN) {
+                            sessionWsRef.current.send(JSON.stringify({ type: 'typing_stopped' }));
+                          }
+                        }, 3000);
+                      }
+                    }}
                     placeholder={selectedSession.ai_enabled ? 'AI is responding. Type to pause AI...' : 'Type reply to customer...'}
                     className="flex-1 bg-white border-gray-200 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500/50 transition-colors"
                   />

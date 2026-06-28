@@ -145,7 +145,6 @@ async def promote_question(
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
-    # Mock promotion for now as it depends on FAQ model which isn't fully connected here
     stmt = select(FailedQuestion).where(FailedQuestion.id == failed_id)
     result = await db.execute(stmt)
     q = result.scalar_one_or_none()
@@ -153,6 +152,42 @@ async def promote_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
         
+    if payload.action == 'new_faq':
+        from database.models import FAQQuestion
+        from services.ollama_service import ollama_service
+        from services.qdrant_service import qdrant_service
+        from routers.faq_question_routes import _build_embed_text
+        
+        new_faq = FAQQuestion(
+            faq_id=payload.category_id,
+            question=payload.question,
+            answer=payload.answer,
+            status=payload.status or "active"
+        )
+        db.add(new_faq)
+        await db.flush()
+
+        try:
+            await qdrant_service.ensure_collection()
+            text_to_embed = _build_embed_text(new_faq.question, new_faq.answer, [])
+            vector = await ollama_service.generate_embedding(text_to_embed)
+
+            await qdrant_service.add_chunk(
+                tenant_id=user["postgres_user"].organization_id,
+                domain_id="",
+                text=text_to_embed,
+                vector=vector,
+                metadata={
+                    "category_id": new_faq.faq_id,
+                    "question_id": new_faq.id,
+                    "type": "faq",
+                    "question": new_faq.question,
+                    "answer": new_faq.answer
+                }
+            )
+        except Exception as e:
+            print(f"[WARN] Qdrant embed failed for promoted question {new_faq.id}: {e}")
+            
     await db.delete(q)
     await db.commit()
     

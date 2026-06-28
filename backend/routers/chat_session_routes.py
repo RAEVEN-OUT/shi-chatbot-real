@@ -213,10 +213,22 @@ async def admin_chat_websocket(websocket: WebSocket, session_id: str):
     await manager.connect(websocket, session_id, role="admin")
     try:
         while True:
-            # Keep the connection alive; handle any future admin WS messages here
-            await websocket.receive_text()
+            text = await websocket.receive_text()
+            try:
+                data = json.loads(text)
+                if data.get("type") in ["typing_started", "typing_stopped"]:
+                    data["actor"] = "admin"
+                    data["session_id"] = session_id
+                    await redis_service.publish_message(f"chat:{session_id}", data)
+            except Exception:
+                pass
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
+        await redis_service.publish_message(f"chat:{session_id}", {
+            "type": "typing_stopped",
+            "actor": "admin",
+            "session_id": session_id
+        })
 
 
 # ─── Admin WebSocket: dashboard conversation-list stream ─────────────────────

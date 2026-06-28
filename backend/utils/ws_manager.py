@@ -84,6 +84,14 @@ class ConnectionManager:
         connections = list(self.active_connections[session_id])
         for (connection, role) in connections:
             try:
+                msg_type = payload.get("type")
+                if msg_type in ["typing_started", "typing_stopped"]:
+                    if role == "widget" and payload.get("actor") == "admin":
+                        await connection.send_json(payload)
+                    elif role == "admin":
+                        await connection.send_json(payload)
+                    continue
+
                 msg_data = payload.get("message", {})
                 sender = msg_data.get("sender")
 
