@@ -88,8 +88,10 @@ class ConnectionManager:
                 sender = msg_data.get("sender")
 
                 if role == "widget":
-                    # Don't echo user's own messages back to the widget
-                    if sender in ("user", "customer"):
+                    # Only broadcast admin messages to the widget via Redis.
+                    # User messages, Bot streams, and System fallbacks are already
+                    # handled directly by the websocket endpoint in widget_routes.py.
+                    if sender != "admin":
                         continue
                     widget_payload = {
                         "type": "message",

@@ -11,6 +11,7 @@ from database.database import get_db
 from database.models import FAQQuestion, FAQCategory, DomainCategory
 from services.ollama_service import ollama_service
 from services.qdrant_service import qdrant_service
+from services.audit_service import log_action
 
 router = APIRouter(prefix="/faq-questions", tags=["faq_questions"])
 
@@ -18,17 +19,19 @@ class FAQQuestionCreate(BaseModel):
     faq_id: str
     question: str
     answer: str
+    aliases: Optional[List[str]] = []
 
 class FAQQuestionUpdate(BaseModel):
     question: Optional[str] = None
     answer: Optional[str] = None
+    aliases: Optional[List[str]] = None
     status: Optional[str] = None
 
 class BulkDeleteRequest(BaseModel):
     question_ids: List[str]
 
 
-def _build_embed_text(question: str, answer: str) -> str:
+def _build_embed_text(question: str, answer: str, aliases: Optional[List[str]] = None) -> str:
     """
     FIX #1 — Embed Q+A together, not question alone.
     Embedding only the question produces poor cosine similarity against
@@ -36,7 +39,10 @@ def _build_embed_text(question: str, answer: str) -> str:
     Embedding the full Q+A gives the vector richer semantic coverage and reliably
     scores ≥ 0.75 against paraphrases of either the question or the answer.
     """
-    return f"Q: {question}\nA: {answer}"
+    text = f"Q: {question}\nA: {answer}"
+    if aliases:
+        text += f"\nAliases: {', '.join(aliases)}"
+    return text
 
 
 @router.get("")
@@ -130,6 +136,7 @@ async def create_faq_question(
         faq_id=data.faq_id,
         question=data.question,
         answer=data.answer,
+        aliases=data.aliases,
         status="active"
     )
     db.add(new_q)
@@ -139,7 +146,7 @@ async def create_faq_question(
     # FIX #1: embed Q+A together
     try:
         await qdrant_service.ensure_collection()
-        text_to_embed = _build_embed_text(new_q.question, new_q.answer)
+        text_to_embed = _build_embed_text(new_q.question, new_q.answer, new_q.aliases)
         vector = await ollama_service.generate_embedding(text_to_embed)
 
         await qdrant_service.add_chunk(
@@ -159,12 +166,22 @@ async def create_faq_question(
         # Non-fatal: question saved to PG; admin can backfill
         print(f"[WARN] Qdrant embed failed for question {new_q.id}: {e}")
 
+    log_action(
+        user_uid=user["uid"],
+        action="CREATE",
+        resource_type="FAQ Question",
+        resource_id=new_q.id,
+        admin_message=f"Created FAQ question '{new_q.question}'",
+        developer_payload={"data": data.model_dump()}
+    )
+
     return {
         "status": "success",
         "question": {
             "id": new_q.id,
             "question": new_q.question,
             "answer": new_q.answer,
+            "aliases": new_q.aliases,
             "status": new_q.status
         }
     }
@@ -193,8 +210,23 @@ async def update_faq_question(
     if data.answer is not None and data.answer != q.answer:
         q.answer = data.answer
         needs_reembed = True
-    if data.status is not None:
+    if data.aliases is not None and data.aliases != q.aliases:
+        q.aliases = data.aliases
+        needs_reembed = True
+    if data.status is not None and data.status != q.status:
         q.status = data.status
+        # If status changes (e.g. inactive vs active), we might want to purge or add it, 
+        # but right now qdrant chunks don't filter by status dynamically unless we delete it.
+        # Actually, if it becomes inactive we should probably delete it from qdrant,
+        # but to keep it simple and consistent with the existing flow, we'll re-embed it.
+        if q.status == "inactive":
+            try:
+                await qdrant_service.delete_chunks_by_question_id(q.id)
+            except Exception as e:
+                print(f"[WARN] Failed to delete from Qdrant on inactive: {e}")
+            needs_reembed = False # already deleted, don't re-add
+        elif q.status == "active":
+            needs_reembed = True
 
     await db.commit()
 
@@ -203,7 +235,7 @@ async def update_faq_question(
             # FIX #2: delete stale Qdrant points before inserting new one
             await qdrant_service.delete_chunks_by_question_id(q.id)
 
-            text_to_embed = _build_embed_text(q.question, q.answer)
+            text_to_embed = _build_embed_text(q.question, q.answer, q.aliases)
             vector = await ollama_service.generate_embedding(text_to_embed)
             await qdrant_service.add_chunk(
                 tenant_id=user["postgres_user"].organization_id,
@@ -220,6 +252,15 @@ async def update_faq_question(
             )
         except Exception as e:
             print(f"[WARN] Re-embed failed for question {q.id}: {e}")
+
+    log_action(
+        user_uid=user["uid"],
+        action="UPDATE",
+        resource_type="FAQ Question",
+        resource_id=q.id,
+        admin_message=f"Updated FAQ question '{q.question}'",
+        developer_payload={"data": data.model_dump(exclude_unset=True)}
+    )
 
     return {"status": "success"}
 
@@ -248,6 +289,15 @@ async def delete_faq_question(
     except Exception as e:
         print(f"[WARN] Qdrant delete failed for question {question_id}: {e}")
 
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="FAQ Question",
+        resource_id=question_id,
+        admin_message=f"Deleted (soft) FAQ question '{q.question}'",
+        developer_payload={"question_id": question_id}
+    )
+
     return {"status": "success"}
 
 
@@ -272,4 +322,14 @@ async def bulk_delete_questions(
             print(f"[WARN] Qdrant bulk-delete failed for {q.id}: {e}")
 
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="FAQ Question",
+        resource_id="BULK",
+        admin_message=f"Bulk deleted (soft) {len(qs)} FAQ questions",
+        developer_payload={"question_ids": [q.id for q in qs]}
+    )
+    
     return {"status": "success", "deleted_count": len(qs)}

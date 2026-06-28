@@ -12,6 +12,7 @@ from database.database import get_db, AsyncSessionLocal
 from database.models import Domain, FAQCategory, DomainCategory, FAQQuestion
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
+from services.audit_service import log_action
 
 logger = logging.getLogger("chatbot.routers.faq_bulk")
 router = APIRouter(prefix="/faq-hierarchy", tags=["FAQ Hierarchy"])
@@ -228,6 +229,15 @@ async def bulk_upload_faq(
             org_id,
             to_index
         )
+        
+    log_action(
+        user_uid=user["uid"],
+        action="CREATE",
+        resource_type="FAQ Bulk Upload",
+        resource_id="BULK",
+        admin_message=f"Bulk uploaded FAQs. {success_count} successful, {len(errors)} errors.",
+        developer_payload={"success_count": success_count, "error_count": len(errors), "errors": errors}
+    )
 
     return {
         "success_count": success_count,

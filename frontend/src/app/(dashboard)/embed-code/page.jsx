@@ -32,8 +32,8 @@ export default function EmbedCode() {
   }, [currentUser]);
 
   let apiUrl = process.env.NEXT_PUBLIC_WITHOUT_API_URL || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '');
-  if (!apiUrl || apiUrl.trim() === '' || apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1')) {
-    apiUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8005';
+  if (!apiUrl || apiUrl.trim() === '') {
+    apiUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000';
   } else {
     apiUrl = apiUrl.trim();
   }

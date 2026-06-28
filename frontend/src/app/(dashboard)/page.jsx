@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatDate } from '@/utils/dateFormatter';
 import { domainService } from '@/services/domainService';
@@ -19,6 +19,7 @@ export default function Home() {
     messagesToday: 0
   });
   const [recentFailed, setRecentFailed] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const hasFetched = React.useRef(false);
@@ -26,10 +27,11 @@ export default function Home() {
   useEffect(() => {
     const loadDashboardData = async () => {
       try {
-        const [domains, failed, conversations] = await Promise.all([
+        const [domains, failed, conversations, analyticsData] = await Promise.all([
           domainService.listDomains(),
           failedQuestionService.listFailedQuestions(),
-          chatbotService.listConversations()
+          chatbotService.listConversations(),
+          chatbotService.getAnalyticsSummary()
         ]);
 
         const domainsList = domains || [];
@@ -62,6 +64,7 @@ export default function Home() {
         });
         
         setRecentFailed(failedList);
+        setAnalytics(analyticsData);
       } catch (e) {
         console.error("Error loading dashboard metrics", e);
       } finally {
@@ -149,7 +152,7 @@ export default function Home() {
                 {recentFailed.slice(0, 5).map(fq => (
                   <div key={fq.id} className="p-4 hover:bg-white border-gray-200 transition-colors">
                     <p className="text-sm font-medium text-gray-900 mb-1">"{fq.customer_question}"</p>
-                    <p className="text-xs text-gray-500">{fq.last_asked_at ? formatDate(fq.last_asked_at, customTimeStamp) : 'N/A'}</p>
+                    <p className="text-xs text-gray-500">{fq.created_at ? formatDate(fq.created_at, customTimeStamp) : 'N/A'}</p>
                   </div>
                 ))}
               </div>
@@ -165,12 +168,48 @@ export default function Home() {
               Full Analytics <ArrowUpRight size={14} />
             </Link>
           </div>
-          <div className="flex-1 p-8 flex flex-col items-center justify-center text-center">
-             <Activity size={48} className="text-gray-600 mb-4" />
-             <p className="text-gray-500 text-sm">Realtime analytics chart will appear here. Track your daily message volume and FAQ resolution rates seamlessly.</p>
-             <Link href="/analytics" className="mt-4 px-4 py-2 bg-white border-gray-200 border border-gray-200 rounded-xl text-sm text-gray-900 hover:bg-white border-gray-200 transition-colors">
-                Go to Analytics
-             </Link>
+          <div className="flex-1 p-6 flex flex-col justify-center">
+            {analytics ? (
+              <div className="space-y-4">
+                <div>
+                  <div className="flex justify-between text-sm mb-1.5">
+                    <span className="text-gray-500">FAQ Verified Matches</span>
+                    <span className="text-gray-900 font-bold">{analytics.faqResolved}</span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2">
+                    <div className="bg-purple-500 h-2 rounded-full" style={{ width: `${analytics.totalQueries > 0 ? (analytics.faqResolved/analytics.totalQueries)*100 : 0}%` }}></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1.5">
+                    <span className="text-gray-500">AI Generative Fallbacks</span>
+                    <span className="text-gray-900 font-bold">{analytics.aiResolved}</span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2">
+                    <div className="bg-blue-500 h-2 rounded-full" style={{ width: `${analytics.totalQueries > 0 ? (analytics.aiResolved/analytics.totalQueries)*100 : 0}%` }}></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1.5">
+                    <span className="text-gray-500">Spam Blocks</span>
+                    <span className="text-gray-900 font-bold">{analytics.spamCount}</span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2">
+                    <div className="bg-red-500 h-2 rounded-full" style={{ width: `${analytics.totalQueries > 0 ? (analytics.spamCount/analytics.totalQueries)*100 : 0}%` }}></div>
+                  </div>
+                </div>
+                <div className="pt-4 text-center">
+                   <Link href="/analytics" className="inline-block px-5 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-medium text-gray-900 hover:bg-gray-50 transition-colors shadow-sm">
+                      View Detailed Analytics
+                   </Link>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 p-8 flex flex-col items-center justify-center text-center">
+                 <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                 <p className="text-gray-500 text-sm">Loading insights...</p>
+              </div>
+            )}
           </div>
         </div>
       </div>

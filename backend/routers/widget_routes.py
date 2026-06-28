@@ -93,7 +93,7 @@ async def widget_config(
     http_scheme = "https" if forwarded_proto == "https" else "http"
     base_url = f"{http_scheme}://{host}"
     logo_url = settings_data.get("widget_logo_url") or "/static/chatbot-logo.png"
-    if logo_url.startswith("/static/"):
+    if logo_url.startswith("/static/") or logo_url.startswith("/public/"):
         logo_url = f"{base_url}{logo_url}"
 
     lead_config = settings_data.get("leadConfig") or {}
@@ -581,7 +581,7 @@ async def widget_chat_websocket(
                 # Only use successful prior exchanges (skip fallback responses).
                 if history_msgs:
                     words = set(normalized_q.lower().split())
-                    is_short = len(words) <= 4
+                    is_short = len(words) < 4
                     has_followup = bool(words & _FOLLOWUP_WORDS)
 
                     if is_short or has_followup:
@@ -687,13 +687,8 @@ async def widget_chat_websocket(
                 # ── No match ───────────────────────────────────────────────────
                 if not top_chunks:
                     logger.info({"event": "NO_MATCH", "question": user_msg, "resolved": resolved_query})
-                    await websocket.send_json({
-                        "type": "message",
-                        "text": fallback,
-                        "sender": "ai",
-                        "source": "fallback",
-                        "confidence": 0.0
-                    })
+                    await websocket.send_json({"type": "stream_delta", "text": fallback})
+                    await websocket.send_json({"type": "stream_done"})
                     asyncio.create_task(run_background_chat_updates(
                         domain_id=domain.id,
                         session_id=session_id,
@@ -718,13 +713,8 @@ async def widget_chat_websocket(
                             "score": max_score,
                             "matched": top_chunks[0].get("payload", {}).get("question")
                         })
-                        await websocket.send_json({
-                            "type": "message",
-                            "text": fast_answer,
-                            "sender": "ai",
-                            "source": "faq",
-                            "confidence": max_score
-                        })
+                        await websocket.send_json({"type": "stream_delta", "text": fast_answer})
+                        await websocket.send_json({"type": "stream_done"})
                         asyncio.create_task(run_background_chat_updates(
                             domain_id=domain.id,
                             session_id=session_id,
@@ -744,13 +734,8 @@ async def widget_chat_websocket(
                         "resolved": resolved_query,
                         "score": max_score
                     })
-                    await websocket.send_json({
-                        "type": "message",
-                        "text": fallback,
-                        "sender": "ai",
-                        "source": "fallback",
-                        "confidence": max_score
-                    })
+                    await websocket.send_json({"type": "stream_delta", "text": fallback})
+                    await websocket.send_json({"type": "stream_done"})
                     asyncio.create_task(run_background_chat_updates(
                         domain_id=domain.id,
                         session_id=session_id,
@@ -805,7 +790,6 @@ async def widget_chat_websocket(
                 # ── Stream tokens ──────────────────────────────────────────────
                 full_answer = ""
                 try:
-                    await websocket.send_json({"type": "stream_delta", "text": ""})
                     async for token in ollama_service.generate_response_stream(
                         system_prompt=system_prompt,
                         user_query=user_msg

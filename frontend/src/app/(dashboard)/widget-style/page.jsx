@@ -18,7 +18,6 @@ export default function WidgetStyle() {
     theme_color: '#7C3AED',
     title: 'Support Chat',
     placeholder: 'Type your question...',
-    position: 'right',
     welcome_message: 'Hi! I\'m SHI Chatbot. How can I help you today?',
     logo_url: '',
     border_radius: '12px',
@@ -174,17 +173,7 @@ export default function WidgetStyle() {
               </select>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Widget Position</label>
-              <select 
-                value={style.position} 
-                onChange={e => setStyle({...style, position: e.target.value})} 
-                className="w-full bg-white border border-[#E2E8F0] rounded-xl px-4 py-2 text-[#0F172A] placeholder-[#64748B] focus:outline-none appearance-none"
-              >
-                <option value="right">Bottom Right</option>
-                <option value="left">Bottom Left</option>
-              </select>
-            </div>
+            {/* Removed widget position dropdown */}
           </div>
 
           <div className="space-y-2">

@@ -10,11 +10,10 @@ export default function WidgetStyleTab({ domain }) {
   const [copied, setCopied] = useState(false);
   
   const [config, setConfig] = useState({
-    color: '#7C3AED',
+    theme_color: '#3B82F6',
     title: 'Support Chat',
     placeholder: 'Type your question...',
-    position: 'right',
-    welcome_message: 'Hi! I\'m SHI Chatbot. How can I help you today?',
+    welcome_message: 'Hi there! How can I help you today?',
     logo_url: '',
     border_radius: '12px',
     font_color: '#ffffff',
@@ -30,11 +29,10 @@ export default function WidgetStyleTab({ domain }) {
         const data = await chatbotService.getWidgetStyle(domain.id);
         if (data && Object.keys(data).length > 0) {
           setConfig({
-            color: data.theme_color || data.primaryColor || '#7C3AED',
+            theme_color: data.theme_color || '#3B82F6',
             title: data.title || 'Support Chat',
             placeholder: data.placeholder || 'Type your question...',
-            position: data.position || 'right',
-            welcome_message: data.welcome_message || data.welcomeMessage || 'Hi! I\'m SHI Chatbot. How can I help you today?',
+            welcome_message: data.welcome_message || 'Hi there! How can I help you today?',
             logo_url: data.logo_url || data.botAvatar || '',
             border_radius: data.border_radius || '12px',
             font_color: data.font_color || '#ffffff',
@@ -79,10 +77,9 @@ export default function WidgetStyleTab({ domain }) {
     setSaving(true);
     try {
       await chatbotService.updateWidgetStyle(domain.id, {
-        theme_color: config.color,
+        theme_color: config.theme_color,
         title: config.title,
         placeholder: config.placeholder,
-        position: config.position,
         welcome_message: config.welcome_message,
         logo_url: config.logo_url,
         border_radius: config.border_radius,
@@ -118,14 +115,14 @@ export default function WidgetStyleTab({ domain }) {
               <div className="flex items-center gap-3">
                 <input 
                   type="color" 
-                  value={config.color} 
-                  onChange={e => setConfig({...config, color: e.target.value})}
+                  value={config.theme_color} 
+                  onChange={e => setConfig({...config, theme_color: e.target.value})}
                   className="w-10 h-10 rounded border-0 bg-transparent cursor-pointer"
                 />
                 <input 
                   type="text" 
-                  value={config.color}
-                  onChange={e => setConfig({...config, color: e.target.value})}
+                  value={config.theme_color}
+                  onChange={e => setConfig({...config, theme_color: e.target.value})}
                   className="flex-1 bg-white border border-gray-200 rounded-xl px-3 py-1.5 text-xs text-gray-900 focus:outline-none uppercase font-mono"
                 />
               </div>
@@ -150,7 +147,7 @@ export default function WidgetStyleTab({ domain }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Border Radius</label>
               <select 
@@ -162,18 +159,6 @@ export default function WidgetStyleTab({ domain }) {
                 <option value="8px">Rounded Soft (8px)</option>
                 <option value="12px">Rounded Medium (12px)</option>
                 <option value="20px">Rounded Pill (20px)</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Widget Position</label>
-              <select 
-                value={config.position} 
-                onChange={e => setConfig({...config, position: e.target.value})} 
-                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none appearance-none"
-              >
-                <option value="right">Bottom Right</option>
-                <option value="left">Bottom Left</option>
               </select>
             </div>
           </div>

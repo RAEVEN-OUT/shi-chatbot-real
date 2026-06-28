@@ -29,6 +29,10 @@ export function NotificationProvider({ children }) {
       prevUnreadRef.current = count;
       setTotalUnread(count);
     } catch (e) {
+      if (e.response && (e.response.status === 403 || e.response.status === 401)) {
+        // Silently ignore auth errors which happen during logout race conditions
+        return;
+      }
       console.error('Error fetching unread notification counts:', e);
     }
   }, [currentUser, userData]);
@@ -94,8 +98,15 @@ export function NotificationProvider({ children }) {
     connectWs();
 
     return () => {
-      wsRef.current?.close();
-      if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      if (wsRef.current) {
+        wsRef.current.onclose = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      if (reconnectRef.current) {
+        clearTimeout(reconnectRef.current);
+        reconnectRef.current = null;
+      }
     };
   }, [currentUser, userData, fetchUnreadCount, connectWs]);
 

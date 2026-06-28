@@ -25,10 +25,13 @@ class OllamaService:
     async def generate_response(self, system_prompt: str, user_query: str) -> str:
         """Generate answer using configured LLM via Ollama."""
         response = await self.client.post(
-            f"{self.base_url}/api/generate",
+            f"{self.base_url}/api/chat",
             json={
                 "model": self.llm_model,
-                "prompt": f"{system_prompt}\n\nQuestion: {user_query}\nAnswer (one paragraph, no preamble):",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Question: {user_query}\nAnswer (one paragraph, no preamble):"}
+                ],
                 "stream": False,
                 "options": {
                     "temperature": 0.1,
@@ -39,7 +42,7 @@ class OllamaService:
         )
         response.raise_for_status()
         data = response.json()
-        return data.get("response", "")
+        return data.get("message", {}).get("content", "")
 
     async def rewrite_query(self, chat_history: list[dict], current_query: str) -> str:
         """Rewrite a follow-up query into a standalone query based on chat history."""
@@ -49,28 +52,34 @@ class OllamaService:
             "that can be understood without the history. If the query is already standalone, output it exactly as is. "
             "Do not answer the question, just provide the rewritten query."
         )
-        prompt = f"{system_prompt}\n\nConversation:\n{history_text}\n\nCurrent User:\n{current_query}\n\nRewritten Query:"
+        prompt = f"Conversation:\n{history_text}\n\nCurrent User:\n{current_query}\n\nRewritten Query:"
         
         response = await self.client.post(
-            f"{self.base_url}/api/generate",
+            f"{self.base_url}/api/chat",
             json={
                 "model": self.llm_model,
-                "prompt": prompt,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
                 "stream": False
             }
         )
         response.raise_for_status()
         data = response.json()
-        return data.get("response", current_query).strip()
+        return data.get("message", {}).get("content", current_query).strip()
 
     async def generate_response_stream(self, system_prompt: str, user_query: str):
         """Generate answer streaming configured LLM response via Ollama."""
         async with self.client.stream(
             "POST",
-            f"{self.base_url}/api/generate",
+            f"{self.base_url}/api/chat",
             json={
                 "model": self.llm_model,
-                "prompt": f"{system_prompt}\n\nQuestion: {user_query}\nAnswer (one paragraph, no preamble):",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Question: {user_query}\nAnswer (one paragraph, no preamble):"}
+                ],
                 "stream": True,
                 "options": {
                     "temperature": 0.1,
@@ -84,7 +93,7 @@ class OllamaService:
                 if line:
                     try:
                         chunk = json.loads(line)
-                        yield chunk.get("response", "")
+                        yield chunk.get("message", {}).get("content", "")
                     except Exception as e:
                         print(f"Error parsing Ollama stream chunk: {e}")
 

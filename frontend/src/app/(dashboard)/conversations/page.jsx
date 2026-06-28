@@ -245,6 +245,8 @@ export default function Conversations() {
               : s
           )
         );
+        // Trigger a background refresh to instantly clear the unread blue dot from tabs
+        setWsTrigger(prev => prev + 1);
       }
     } catch (e) {
       console.error('Failed to load active session details', e);

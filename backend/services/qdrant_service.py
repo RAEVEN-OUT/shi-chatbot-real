@@ -70,6 +70,17 @@ class QdrantService:
             )
         )
 
+    async def delete_chunks_by_category_id(self, category_id: str):
+        """Delete all Qdrant points for a given category_id."""
+        await self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[FieldCondition(key="category_id", match=MatchValue(value=category_id))]
+                )
+            )
+        )
+
     async def search_chunks(
         self,
         tenant_id: str,

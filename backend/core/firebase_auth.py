@@ -71,7 +71,8 @@ async def get_current_user(
 
 async def require_subscriber(user: dict = Depends(get_current_user)):
     """Ensure user is a subscriber or admin"""
-    if user["role"] not in ["subscriber", "admin"]:
+    role = user.get("role")
+    if role not in ["subscriber", "admin"] and role is not None:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     return user
 

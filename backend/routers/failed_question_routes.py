@@ -6,6 +6,7 @@ from database.database import get_db
 from database.models import FailedQuestion, Domain
 from core.firebase_auth import require_subscriber
 from pydantic import BaseModel
+from services.audit_service import log_action
 
 router = APIRouter(prefix="/failed-questions", tags=["Failed Questions"])
 spam_router = APIRouter(prefix="/spam-questions", tags=["Spam Questions"])
@@ -69,6 +70,16 @@ async def delete_failed_question(
         
     await db.delete(q)
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="Failed Question",
+        resource_id=failed_id,
+        admin_message=f"Deleted failed question '{q.question}'",
+        developer_payload={"question_id": failed_id}
+    )
+    
     return {"success": True}
 
 @router.post("/bulk-delete")
@@ -85,6 +96,16 @@ async def bulk_delete_failed_questions(
         await db.delete(q)
         
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="Failed Question",
+        resource_id="BULK",
+        admin_message=f"Bulk deleted {len(questions)} failed questions",
+        developer_payload={"question_ids": payload.ids}
+    )
+    
     return {"success": True, "deleted_count": len(questions)}
 
 @router.post("/{failed_id}/spam")
@@ -105,6 +126,16 @@ async def flag_as_spam(
     q.failure_reason = "SPAM"
     
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="UPDATE",
+        resource_type="Spam Question",
+        resource_id=failed_id,
+        admin_message=f"Flagged failed question as spam: '{q.question}'",
+        developer_payload={"question_id": failed_id}
+    )
+    
     return {"success": True}
 
 @router.post("/{failed_id}/promote")
@@ -124,6 +155,16 @@ async def promote_question(
         
     await db.delete(q)
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="UPDATE",
+        resource_type="Failed Question",
+        resource_id=failed_id,
+        admin_message=f"Promoted failed question to FAQ: '{q.question}'",
+        developer_payload={"question_id": failed_id}
+    )
+    
     return {"success": True}
 
 @spam_router.get("")
@@ -171,6 +212,16 @@ async def delete_spam_question(
         
     await db.delete(q)
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="Spam Question",
+        resource_id=spam_id,
+        admin_message=f"Deleted spam question '{q.question}'",
+        developer_payload={"question_id": spam_id}
+    )
+    
     return {"success": True}
 
 @spam_router.post("/bulk-delete")
@@ -187,4 +238,14 @@ async def bulk_delete_spam_questions(
         await db.delete(q)
         
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="Spam Question",
+        resource_id="BULK",
+        admin_message=f"Bulk deleted {len(questions)} spam questions",
+        developer_payload={"question_ids": payload.ids}
+    )
+    
     return {"success": True, "deleted_count": len(questions)}

@@ -49,7 +49,7 @@ export default function Login() {
       router.push('/');
     } catch (err) {
       setError('Failed to sign in. Check your credentials.');
-      console.error(err);
+      console.warn('Login failure:', err.message);
     } finally {
       setLoading(false);
     }

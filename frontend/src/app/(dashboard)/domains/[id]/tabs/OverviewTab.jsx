@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { domainService } from '@/services/domainService';
 import { Settings, Save, X, Edit, ShieldCheck, Phone, MessageSquare, Globe, User, Palette } from 'lucide-react';
 import { useToast } from '@/contexts/ToastContext';
+import AvatarCropperModal from '@/components/AvatarCropperModal';
 
 export default function OverviewTab({ domain: initialDomain }) {
   const [domain, setDomain] = useState(initialDomain);
@@ -14,6 +15,8 @@ export default function OverviewTab({ domain: initialDomain }) {
     !initialDomain.widget_logo_url || initialDomain.widget_logo_url === '/static/chatbot-logo.png' ? 'default' : 'custom'
   );
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [cropperOpen, setCropperOpen] = useState(false);
+  const [cropperImageSrc, setCropperImageSrc] = useState(null);
 
   const handleLogoSourceChange = (type) => {
     setLogoSource(type);
@@ -22,10 +25,27 @@ export default function OverviewTab({ domain: initialDomain }) {
     }
   };
 
-  const handleLogoUpload = async (e) => {
+  const handleFileSelect = (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
+    // Reset the input so the same file can be selected again if needed
+    e.target.value = '';
+
+    const reader = new FileReader();
+    reader.addEventListener('load', () => {
+      setCropperImageSrc(reader.result);
+      setCropperOpen(true);
+    });
+    reader.readAsDataURL(file);
+  };
+
+  const handleCropComplete = async (croppedBlob) => {
+    setCropperOpen(false);
+    
+    // Create a File object from the Blob
+    const file = new File([croppedBlob], "avatar.png", { type: "image/png" });
+    
     const uploadData = new FormData();
     uploadData.append('file', file);
 
@@ -274,7 +294,7 @@ export default function OverviewTab({ domain: initialDomain }) {
                             type="file"
                             id="logo-upload-input"
                             accept="image/*"
-                            onChange={handleLogoUpload}
+                            onChange={handleFileSelect}
                             className="hidden"
                           />
                           <label
@@ -416,6 +436,13 @@ export default function OverviewTab({ domain: initialDomain }) {
           </div>
         </div>
       )}
+      
+      <AvatarCropperModal
+        isOpen={cropperOpen}
+        onClose={() => setCropperOpen(false)}
+        imageSrc={cropperImageSrc}
+        onCropComplete={handleCropComplete}
+      />
     </div>
   );
 }

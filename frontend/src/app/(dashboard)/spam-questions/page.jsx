@@ -186,7 +186,7 @@ export default function SpamQuestions() {
                         {s.spam_count || 1}
                       </td>
                       <td className="p-4 text-sm text-gray-500">
-                        {s.last_asked_at ? formatDate(s.last_asked_at, customTimeStamp) : 'N/A'}
+                        {s.created_at ? formatDate(s.created_at, customTimeStamp) : 'N/A'}
                       </td>
                       <td className="p-4 text-right flex items-center justify-end">
                         <button 

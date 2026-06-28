@@ -99,19 +99,6 @@ export default function FailedQuestions() {
   const handleDelete = async (id) => {
     const confirmed = await confirmAction({
       title: "Dismiss Log",
-      text: "Are you sure you want to dismiss this failed question log?",
-      confirmButtonText: "Yes, dismiss",
-      preConfirm: async () => {
-        await failedQuestionService.deleteFailedQuestion(id);
-      }
-    });
-    if (!confirmed) return;
-    toast.success("Failed question dismissed");
-  };
-
-  const handleSelectQuestion = (id) => {
-    const newSelected = new Set(selectedQuestions);
-    if (newSelected.has(id)) {
       newSelected.delete(id);
     } else {
       newSelected.add(id);

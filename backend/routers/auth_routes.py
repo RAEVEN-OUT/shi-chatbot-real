@@ -37,6 +37,11 @@ async def login(
         db.add(user)
         await db.commit()
         await db.refresh(user)
+    elif not user.role:
+        user.role = "admin" if email in ["developer@cwd.co.in", "admin@example.com"] else "subscriber"
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
 
     # Ensure user has an organization (for subscribers and admins alike to own domains)
     if not user.organization_id:

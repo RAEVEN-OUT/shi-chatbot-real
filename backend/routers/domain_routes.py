@@ -9,6 +9,7 @@ from core.firebase_auth import get_current_user, require_subscriber
 from database.database import get_db
 from database.models import Domain, RetrainingJob, DomainCategory, FAQCategory
 from services.redis_service import redis_service
+from services.audit_service import log_action
 
 router = APIRouter(prefix="/domains", tags=["domains"])
 
@@ -73,6 +74,8 @@ async def list_domains(
             "widget_title": (d.settings or {}).get("widget_title", "Support Assistant"),
             "widget_color": (d.settings or {}).get("widget_color", "#7C3AED"),
             "bot_avatar": (d.settings or {}).get("bot_avatar", ""),
+            "widget_theme_color": (d.settings or {}).get("widget_theme_color", (d.settings or {}).get("widget_color", "#7C3AED")),
+            "widget_logo_url": (d.settings or {}).get("widget_logo_url", (d.settings or {}).get("bot_avatar", "")),
             "category_ids": category_map.get(d.id, []),
             "settings": d.settings,
             "created_at": d.created_at
@@ -133,6 +136,15 @@ async def create_domain(
     await db.commit()
     await db.refresh(new_domain)
     
+    log_action(
+        user_uid=user["uid"],
+        action="CREATE",
+        resource_type="Domain",
+        resource_id=new_domain.id,
+        admin_message=f"Created domain '{data.name}' ({data.domain_url})",
+        developer_payload={"data": data.model_dump()}
+    )
+    
     return {"status": "success", "domain": new_domain.id}
 
 @router.put("/{domain_id}")
@@ -181,6 +193,16 @@ async def update_domain(
     flag_modified(domain, "settings")
         
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="UPDATE",
+        resource_type="Domain",
+        resource_id=domain.id,
+        admin_message=f"Updated settings for domain '{domain.domain_name}'",
+        developer_payload={"data": data.model_dump(exclude_unset=True)}
+    )
+    
     return {"status": "success"}
 
 @router.delete("/{domain_id}")
@@ -201,6 +223,16 @@ async def delete_domain(
         
     await db.delete(domain)
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="Domain",
+        resource_id=domain.id,
+        admin_message=f"Deleted domain '{domain.domain_name}'",
+        developer_payload={"domain_id": domain.id, "domain_name": domain.domain_name}
+    )
+    
     return {"status": "success"}
 
 @router.post("/bulk-delete")
@@ -220,6 +252,16 @@ async def bulk_delete_domains(
         await db.delete(d)
         
     await db.commit()
+    
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="Domain",
+        resource_id="BULK",
+        admin_message=f"Bulk deleted {len(domains)} domains",
+        developer_payload={"domain_ids": [d.id for d in domains]}
+    )
+    
     return {"status": "success", "deleted_count": len(domains)}
 
 @router.post("/{domain_id}/retrain")
