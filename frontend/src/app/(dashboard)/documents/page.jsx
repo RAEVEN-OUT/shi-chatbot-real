@@ -5,7 +5,20 @@ import { uploadDocument, listDocuments, deleteDocument, getDocumentStatus } from
 const STATUS_COLORS = {
   ready: "bg-green-100 text-green-700",
   processing: "bg-yellow-100 text-yellow-700",
+  queued: "bg-gray-100 text-gray-700",
+  embedding: "bg-blue-100 text-blue-700",
+  indexing: "bg-indigo-100 text-indigo-700",
   failed: "bg-red-100 text-red-700",
+};
+
+const STATUS_LABELS = {
+  uploading: "Uploading",
+  queued: "Extracting",
+  processing: "Chunking",
+  embedding: "Embedding",
+  indexing: "Indexing",
+  ready: "Ready",
+  failed: "Failed",
 };
 
 const FILE_ICONS = { pdf: "📄", txt: "📝", docx: "📃" };
@@ -143,12 +156,15 @@ export default function DocumentsPage() {
             <p className="text-sm font-medium text-gray-800 truncate">{uploadProgress.name}</p>
             <p className="text-xs text-gray-500 mt-0.5">
               {uploadProgress.status === "uploading" && "Uploading…"}
-              {uploadProgress.status === "processing" && "Chunking & embedding — this may take a moment…"}
+              {uploadProgress.status === "queued" && "In queue…"}
+              {uploadProgress.status === "processing" && "Chunking document…"}
+              {uploadProgress.status === "embedding" && "Generating embeddings (this may take a moment)…"}
+              {uploadProgress.status === "indexing" && "Indexing in vector store…"}
               {uploadProgress.status === "ready" && `✅ Ready — ${uploadProgress.chunks} chunks indexed`}
               {uploadProgress.status === "failed" && "❌ Ingestion failed"}
             </p>
           </div>
-          {(uploadProgress.status === "processing" || uploadProgress.status === "uploading") && (
+          {["uploading", "queued", "processing", "embedding", "indexing"].includes(uploadProgress.status) && (
             <div className="w-5 h-5 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
           )}
         </div>
@@ -184,18 +200,35 @@ export default function DocumentsPage() {
             >
               <span className="text-2xl flex-shrink-0">{FILE_ICONS[doc.file_type] || "📄"}</span>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-800 truncate">{doc.source_title}</p>
-                <p className="text-xs text-gray-400 truncate">
-                  {doc.filename}
-                  {doc.file_size ? ` · ${(doc.file_size / 1024).toFixed(1)} KB` : ""}
-                  {doc.chunk_count > 0 ? ` · ${doc.chunk_count} chunks` : ""}
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-semibold text-gray-800 truncate">{doc.source_title}</p>
+                  {doc.domain_id && (
+                    <span className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded border border-purple-100">
+                      Domain: {doc.domain_id}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-1 flex items-center gap-2 flex-wrap">
+                  <span className="truncate">{doc.filename}</span>
+                  <span>•</span>
+                  <span>{doc.file_size ? `${(doc.file_size / 1024).toFixed(1)} KB` : "0 KB"}</span>
+                  <span>•</span>
+                  <span>{doc.chunk_count} Chunks</span>
+                  {doc.created_at && (
+                    <>
+                      <span>•</span>
+                      <span>{new Date(doc.created_at).toLocaleString()}</span>
+                    </>
+                  )}
                 </p>
                 {doc.error_message && (
-                  <p className="text-xs text-red-500 mt-0.5 truncate">{doc.error_message}</p>
+                  <p className="text-xs text-red-500 mt-1 truncate">
+                    {doc.error_stage ? `${doc.error_stage}: ` : ""}{doc.error_message}
+                  </p>
                 )}
               </div>
               <span className={`text-xs font-medium px-2 py-0.5 rounded-full flex-shrink-0 ${STATUS_COLORS[doc.status] || "bg-gray-100 text-gray-500"}`}>
-                {doc.status}
+                {STATUS_LABELS[doc.status] || doc.status}
               </span>
               <button
                 onClick={() => handleDelete(doc.id, doc.source_title)}

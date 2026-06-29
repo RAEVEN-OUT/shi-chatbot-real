@@ -63,6 +63,7 @@ def _doc_out(doc: DocumentSource) -> dict:
         "status": doc.status,
         "chunk_count": doc.chunk_count,
         "error_message": doc.error_message,
+        "error_stage": doc.error_stage,
         "domain_id": doc.domain_id,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
     }
@@ -112,23 +113,16 @@ async def upload_document(
         )
 
     title = (source_title or "").strip() or (file.filename or "Untitled")
-    file_size = None
-    try:
-        content = await file.read()
-        file_size = len(content)
-        await file.seek(0)
-    except Exception:
-        pass
 
-    # Create a DB record immediately so the frontend can poll
+    # Create a DB record immediately so the frontend can poll, even if extraction fails
     doc = DocumentSource(
         organization_id=org_id,
         domain_id=effective_domain_id,
         source_title=title,
         filename=file.filename or "upload",
         file_type=ext,
-        file_size=file_size,
-        status="processing",
+        file_size=0,
+        status="queued",
         chunk_count=0,
     )
     db.add(doc)
@@ -136,14 +130,45 @@ async def upload_document(
     await db.refresh(doc)
     doc_id = doc.id
 
+    # Extract and validate text synchronously
+    try:
+        raw_text, file_type, file_size = await extract_text(file)
+        doc.file_size = file_size
+        await db.commit()
+    except HTTPException as e:
+        doc.status = "failed"
+        doc.error_stage = "Extraction failed"
+        doc.error_message = e.detail
+        await db.commit()
+        # Still return 202 to the user, as the background task pattern expects success immediately?
+        # No, wait, currently it returns HTTPException which the user expects (400 for bad files).
+        # We will still raise it so the frontend shows the immediate error, but it's recorded in DB too.
+        raise
+    except Exception as e:
+        doc.status = "failed"
+        doc.error_stage = "Extraction failed"
+        doc.error_message = str(e)
+        await db.commit()
+        raise HTTPException(status_code=500, detail=str(e))
+
     # Run ingestion in background so the HTTP response returns immediately
     async def _run_ingestion():
         async with db.bind.connect() as conn:
             from database.database import AsyncSessionLocal
             async with AsyncSessionLocal() as bg_db:
+                
+                async def update_status(new_status: str):
+                    stmt = select(DocumentSource).where(DocumentSource.id == doc_id)
+                    r = await bg_db.execute(stmt)
+                    record = r.scalar_one_or_none()
+                    if record:
+                        record.status = new_status
+                        await bg_db.commit()
+
                 try:
+                    await update_status("processing")
                     n_chunks = await ingest_document(
-                        file=file,
+                        raw_text=raw_text,
                         tenant_id=org_id,
                         domain_id=effective_domain_id,
                         document_source_id=doc_id,
@@ -151,33 +176,60 @@ async def upload_document(
                         filename=file.filename or "upload",
                         ollama_service=ollama_service,
                         qdrant_service=qdrant_service,
+                        status_callback=update_status,
                     )
+                    await update_status("ready")
                     stmt = select(DocumentSource).where(DocumentSource.id == doc_id)
                     r = await bg_db.execute(stmt)
                     record = r.scalar_one_or_none()
                     if record:
-                        record.status = "ready"
                         record.chunk_count = n_chunks
                         await bg_db.commit()
                     logger.info(f"[DocumentRoutes] Ingestion complete: {doc_id} ({n_chunks} chunks)")
                 except HTTPException as e:
+                    logger.error(f"[DocumentRoutes] Ingestion failed: {doc_id}: {e.detail}")
                     stmt = select(DocumentSource).where(DocumentSource.id == doc_id)
                     r = await bg_db.execute(stmt)
                     record = r.scalar_one_or_none()
                     if record:
+                        stage = record.status
+                        if stage == "processing": record.error_stage = "Chunking failed"
+                        elif stage == "embedding": record.error_stage = "Embedding failed"
+                        elif stage == "indexing": record.error_stage = "Vector store failed"
+                        else: record.error_stage = f"{stage.capitalize()} failed"
                         record.status = "failed"
                         record.error_message = e.detail
                         await bg_db.commit()
-                    logger.error(f"[DocumentRoutes] Ingestion failed: {doc_id}: {e.detail}")
                 except Exception as e:
+                    logger.error(f"[DocumentRoutes] Ingestion unexpected error: {doc_id}: {e}")
                     stmt = select(DocumentSource).where(DocumentSource.id == doc_id)
                     r = await bg_db.execute(stmt)
                     record = r.scalar_one_or_none()
                     if record:
+                        stage = record.status
+                        if stage == "processing": record.error_stage = "Chunking failed"
+                        elif stage == "embedding": record.error_stage = "Embedding failed"
+                        elif stage == "indexing": record.error_stage = "Vector store failed"
+                        else: record.error_stage = f"{stage.capitalize()} failed"
                         record.status = "failed"
                         record.error_message = str(e)
                         await bg_db.commit()
-                    logger.error(f"[DocumentRoutes] Ingestion unexpected error: {doc_id}: {e}")
+                finally:
+                    try:
+                        stmt = select(DocumentSource).where(DocumentSource.id == doc_id)
+                        r = await bg_db.execute(stmt)
+                        record = r.scalar_one_or_none()
+                        if record and record.status not in ["ready", "failed"]:
+                            stage = record.status
+                            if stage == "processing": record.error_stage = "Chunking failed"
+                            elif stage == "embedding": record.error_stage = "Embedding failed"
+                            elif stage == "indexing": record.error_stage = "Vector store failed"
+                            else: record.error_stage = f"{stage.capitalize()} failed"
+                            record.status = "failed"
+                            record.error_message = record.error_message or "Process terminated unexpectedly."
+                            await bg_db.commit()
+                    except Exception as fatal_e:
+                        logger.error(f"[DocumentRoutes] Final failsafe failed for {doc_id}: {fatal_e}")
 
     asyncio.create_task(_run_ingestion())
 
@@ -260,11 +312,12 @@ async def delete_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
-    # Delete vector chunks first (best-effort; don't block DB delete on Qdrant errors)
+    # Delete vector chunks first. If this fails, abort the DB deletion to avoid orphan vectors!
     try:
         await qdrant_service.delete_chunks_by_document_id(doc_id)
     except Exception as e:
-        logger.warning(f"[DocumentRoutes] Qdrant delete warning for {doc_id}: {e}")
+        logger.error(f"[DocumentRoutes] Qdrant delete failed for {doc_id}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to delete document from vector store. Aborting to prevent orphan vectors.")
 
     await db.delete(doc)
     await db.commit()

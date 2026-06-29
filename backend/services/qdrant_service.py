@@ -56,6 +56,15 @@ class QdrantService:
         )
         return point_id
 
+    async def upsert_batch(self, points: list[PointStruct]):
+        """Batch insert multiple PointStructs into Qdrant."""
+        if not points:
+            return
+        await self.client.upsert(
+            collection_name=self.collection_name,
+            points=points
+        )
+
     async def delete_chunks_by_question_id(self, question_id: str):
         """
         FIX #2 — Delete all Qdrant points for a given question_id.
