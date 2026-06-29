@@ -325,7 +325,7 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
                 {domains
                   .filter(d => !activeDomainFilter || (d.domain_url && d.domain_url.toLowerCase().includes(activeDomainFilter)))
                   .map(domain => (
-                  <TreeNode key={domain.id} type="domain" data={domain} nodePath={`d_${domain.id}`} depth={0} expandedNodes={expandedNodes} toggleNode={toggleNode} selectNode={selectNode} selectedNode={selectedNode} loadingNode={loadingNode} domainCategoryMap={domainCategoryMap} categories={categories} documents={documents} scopedDomainId={scopedDomainId} />
+                  <TreeNode key={domain.id} type="domain" data={domain} nodePath={`d_${domain.id}`} depth={0} expandedNodes={expandedNodes} toggleNode={toggleNode} selectNode={selectNode} selectedNode={selectedNode} loadingNode={loadingNode} domainCategoryMap={domainCategoryMap} categories={categories} documents={documents} scopedDomainId={scopedDomainId} openModal={openModal} />
                 ))}
               </div>
             }

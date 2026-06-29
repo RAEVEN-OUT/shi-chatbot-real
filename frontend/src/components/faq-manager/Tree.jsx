@@ -14,7 +14,7 @@ import { domainService } from '@/services/domainService';
 import ModalWrapper from '@/components/ui/ModalWrapper';
 
 
-export function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNode, selectNode, selectedNode, loadingNode, domainCategoryMap, categories, documents, scopedDomainId }) {
+export function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNode, selectNode, selectedNode, loadingNode, domainCategoryMap, categories, documents, scopedDomainId, openModal }) {
   const isExpanded = !!expandedNodes[nodePath];
   const isSelected = selectedNode?.id === data.id;
   const isLoading = !!loadingNode[nodePath];
@@ -87,10 +87,30 @@ export function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNod
         <div className="relative mt-1">
           <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-100/50 -z-10"></div>
           <div className="pl-6 space-y-0.5 pb-1">
+            {type === 'folder' && data.folderType === 'category' && (
+              <div className="relative mb-1">
+                <button 
+                  onClick={() => openModal && openModal('create_category', { domain_id: data.domain_id })}
+                  className="flex items-center gap-2 text-xs font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 py-1.5 px-2 w-full text-left rounded-lg transition-colors border border-dashed border-blue-200"
+                >
+                  <Plus size={14} /> Create Category
+                </button>
+              </div>
+            )}
+            {type === 'folder' && data.folderType === 'document' && (
+              <div className="relative mb-1">
+                <button 
+                  onClick={() => openModal && openModal('document_upload', { domain_id: data.domain_id })}
+                  className="flex items-center gap-2 text-xs font-medium text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 py-1.5 px-2 w-full text-left rounded-lg transition-colors border border-dashed border-emerald-200"
+                >
+                  <UploadCloud size={14} /> Upload Document
+                </button>
+              </div>
+            )}
             {children.map(child => (
               <div key={child.id} className="relative">
                 <div className="absolute left-[-8px] top-[14px] w-3 h-px bg-gray-100/50 -z-10"></div>
-                <TreeNode type={childType === 'folder' ? 'folder' : childType} data={child} nodePath={`${nodePath}-${childType.charAt(0)}_${child.id}`} depth={depth + 1} expandedNodes={expandedNodes} toggleNode={toggleNode} selectNode={selectNode} selectedNode={selectedNode} loadingNode={loadingNode} domainCategoryMap={domainCategoryMap} categories={categories} documents={documents} scopedDomainId={scopedDomainId} />
+                <TreeNode type={childType === 'folder' ? 'folder' : childType} data={child} nodePath={`${nodePath}-${childType.charAt(0)}_${child.id}`} depth={depth + 1} expandedNodes={expandedNodes} toggleNode={toggleNode} selectNode={selectNode} selectedNode={selectedNode} loadingNode={loadingNode} domainCategoryMap={domainCategoryMap} categories={categories} documents={documents} scopedDomainId={scopedDomainId} openModal={openModal} />
               </div>
             ))}
           </div>

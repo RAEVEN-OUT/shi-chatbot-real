@@ -13,7 +13,10 @@ import { confirmAction } from '@/utils/confirm';
 import { domainService } from '@/services/domainService';
 import ModalWrapper from '@/components/ui/ModalWrapper';
 import { EditDomainModal } from './Modals';
-
+import { Tabs } from './Tree';
+import { CategoryManager } from './CategoryManager';
+import { QuestionManager } from './QuestionManager';
+import { DocumentManager } from './DocumentManager';
 export function DomainManager({ deletingId, domain, domains, setDomains, categories, setCategories, domainCategoryMap, setDomainCategoryMap, documents, setDocuments, openModal, selectNode, handleDeleteNode, initialTab, scopedDomainId }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'assignments');
   const assignedCatIds = domainCategoryMap[domain.id] || [];
@@ -116,26 +119,8 @@ export function DomainManager({ deletingId, domain, domains, setDomains, categor
 
   return (
     <div className="flex flex-col h-full min-w-0">
-      <div className="p-4 md:p-6 border-b border-gray-200 flex flex-col xl:flex-row justify-between items-start bg-white shrink-0 gap-4">
-        <div className="w-full xl:w-auto overflow-hidden">
-          {!scopedDomainId && (
-            <>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[10px] uppercase font-bold text-blue-400 tracking-wider">Domain</span>
-                <span className={`text-[10px] uppercase px-2 py-0.5 rounded ${domain.is_active ? 'bg-emerald-500/20 text-emerald-400' : 'bg-gray-100 text-gray-700'}`}>{domain.is_active ? 'Active' : 'Disabled'}</span>
-              </div>
-              <h2 className="text-xl md:text-2xl font-bold text-gray-900 truncate">{domain.domain_url}</h2>
-            </>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2 w-full xl:w-auto">
-          <button onClick={() => setActiveTab('create')} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium flex items-center gap-1 shadow-sm transition-colors"><Plus size={16}/> Create Category</button>
-          <button onClick={() => openModal('bulk_download', null, domain)} className="px-3 py-2 bg-gray-50 hover:bg-gray-100 text-gray-900 rounded text-sm font-medium flex items-center gap-1 shadow-sm transition-colors"><Download size={14}/> Bulk Download</button>
-          <div className="w-px h-8 bg-gray-50 mx-1 mt-1"></div>
-          <button onClick={() => handleDeleteNode('domain', domain.id)} disabled={deletingId === domain.id} className="p-2 mt-1 bg-gray-50 hover:bg-red-500/20 rounded text-gray-700 hover:text-gray-500 transition-colors disabled:opacity-50">{deletingId === domain.id ? <RefreshCw className="animate-spin h-4 w-4" /> : <Trash2 size={16}/>}</button>
-        </div>
-      </div>
-      <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
+
+
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'assignments' && (
           <div className="max-w-4xl space-y-4 m-6">
@@ -201,7 +186,7 @@ export function DomainManager({ deletingId, domain, domains, setDomains, categor
             ) : (
               <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                 {domainDocuments.map(doc => (
-                  <div key={doc.id} className="bg-white border border-gray-200 rounded-xl p-4 hover:border-teal-500 transition-colors group relative shadow-sm">
+                  <div key={doc.id} onClick={() => selectNode('document', doc.id, doc)} className="bg-white border border-gray-200 rounded-xl p-4 hover:border-teal-500 transition-colors group relative shadow-sm cursor-pointer">
                     <div className="flex justify-between items-start mb-2 gap-2">
                       <div className="flex items-center gap-2 text-sm font-bold text-gray-900 min-w-0 flex-1"><MessageCircle className="h-4 w-4 text-teal-500 shrink-0" /> <span title={doc.source_title} className="truncate">{doc.source_title}</span></div>
                       <div className="flex items-center gap-1 shrink-0">

@@ -33,11 +33,19 @@ export default function DocumentsPage() {
   const fileInputRef = useRef(null);
   const pollRef = useRef(null);
 
+  const fetchDocsRef = useRef(null);
+
   // ── Load documents ─────────────────────────────────────────────────────────
   const fetchDocs = async () => {
     try {
       const data = await listDocuments();
       setDocs(data);
+      
+      const isProcessing = data.some(d => ["queued", "processing", "embedding", "indexing"].includes(d.status));
+      if (isProcessing) {
+        clearTimeout(fetchDocsRef.current);
+        fetchDocsRef.current = setTimeout(fetchDocs, 3000);
+      }
     } catch (e) {
       setError("Failed to load documents.");
     } finally {
@@ -47,7 +55,10 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     fetchDocs();
-    return () => clearInterval(pollRef.current);
+    return () => {
+      clearInterval(pollRef.current);
+      clearTimeout(fetchDocsRef.current);
+    };
   }, []);
 
   // ── Poll a processing document ─────────────────────────────────────────────

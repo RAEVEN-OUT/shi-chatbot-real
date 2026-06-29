@@ -491,9 +491,18 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
         formData.append("source_title", docTitle.trim());
       }
 
-      const res = await api.post('/documents/upload', formData, {
-        headers: { "Content-Type": "multipart/form-data" }
+      const token = await import('@/firebase/config').then(m => m.auth.currentUser?.getIdToken());
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const rawRes = await fetch(`${apiUrl}/documents/upload`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: formData
       });
+      if (!rawRes.ok) {
+        const errData = await rawRes.json().catch(() => ({}));
+        throw { response: { data: errData, status: rawRes.status } };
+      }
+      const res = { data: await rawRes.json() };
       setDocResults(res.data);
       showToast('Document uploaded successfully and is being processed.', 'success');
       loadInitialData();

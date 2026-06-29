@@ -281,7 +281,7 @@
     // If mismatch, inform the user that the chatbot is temporarily unavailable.
     const configuredDomain = (conf.domain_url || conf.domain_name || '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0].toLowerCase();
     const currentDomain = window.location.hostname.toLowerCase().replace(/^www\./, '');
-    const domainMatch = !configuredDomain || currentDomain === configuredDomain;
+    const domainMatch = !configuredDomain || currentDomain === configuredDomain || isLocalEnv();
 
     if (!domainMatch) {
       if (container && container.parentNode) {

@@ -12,9 +12,18 @@ export async function uploadDocument(file, domainId = null, sourceTitle = null) 
   if (domainId) formData.append("domain_id", domainId);
   if (sourceTitle) formData.append("source_title", sourceTitle);
 
-  const res = await api.post("/documents/upload", formData, {
-    headers: { "Content-Type": "multipart/form-data" },
+  const token = await import('@/firebase/config').then(m => m.auth.currentUser?.getIdToken());
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const rawRes = await fetch(`${apiUrl}/documents/upload`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: formData
   });
+  if (!rawRes.ok) {
+    const errData = await rawRes.json().catch(() => ({}));
+    throw { response: { data: errData, status: rawRes.status } };
+  }
+  const res = { data: await rawRes.json() };
   return res.data;
 }
 

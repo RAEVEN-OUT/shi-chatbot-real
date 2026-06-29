@@ -12,6 +12,7 @@ import api from '@/utils/api';
 import { confirmAction } from '@/utils/confirm';
 import { domainService } from '@/services/domainService';
 import ModalWrapper from '@/components/ui/ModalWrapper';
+import { Tabs } from './Tree';
 import { CreateQuestionModal, AssignExistingModal } from './Modals';
 
 export function QuestionManager({ deletingId, question, customTimeStamp, categories, setCategories, selectNode, handleDeleteNode }) {
@@ -86,25 +87,9 @@ export function QuestionManager({ deletingId, question, customTimeStamp, categor
 
   return (
     <div className="flex flex-col h-full min-w-0">
-      <div className="p-4 md:p-6 border-b border-gray-200 flex flex-col xl:flex-row justify-between items-start shrink-0 gap-4">
-        <div className="w-full xl:w-auto overflow-hidden">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">FAQ Question</span>
-            <span className={`text-[10px] uppercase px-2 py-0.5 rounded font-bold ${question.status === 'active' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-100 text-red-600'}`}>{question.status}</span>
-          </div>
-          <h2 className="text-xl md:text-2xl font-bold text-gray-900 truncate" title={question.question}>{question.question}</h2>
-        </div>
-        <div className="flex flex-wrap gap-2 w-full xl:w-auto">
-          <button onClick={() => setActiveTab('edit')} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium flex items-center gap-1 shadow-sm transition-colors"><Edit3 size={16}/> Edit FAQ</button>
-          <div className="w-px h-8 bg-gray-50 mx-1 mt-1"></div>
-          <button onClick={() => handleDeleteNode('question', question.id)} disabled={deletingId === question.id} className="p-2 mt-1 bg-gray-50 hover:bg-red-500/20 rounded text-gray-700 hover:text-gray-500 transition-colors disabled:opacity-50" title="Delete FAQ">{deletingId === question.id ? <RefreshCw className="animate-spin h-4 w-4" /> : <Trash2 size={16}/>}</button>
-        </div>
-      </div>
-      
-      <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
+
       
       <div className="flex-1 overflow-y-auto">
-
 
         {activeTab === 'edit' && (
           <form onSubmit={handleSave} className="max-w-4xl space-y-5 m-6">
