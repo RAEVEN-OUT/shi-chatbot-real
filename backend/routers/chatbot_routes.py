@@ -4,6 +4,7 @@ from sqlalchemy.future import select
 from pydantic import BaseModel
 from database.database import get_db, AsyncSessionLocal
 from database.models import Domain, FailedQuestion, DomainCategory, FAQQuestion, FAQCategory
+from schemas.chatbot import ChatRequest, ChatResponse, DocumentReference
 from schemas.retrieval import KnowledgeSource
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
@@ -16,7 +17,7 @@ import asyncio
 import re
 
 def _strip_preamble(text: str) -> str:
-    """Remove LLM thinking-out-loud preambles before the actual answer."""
+    """Remove LLM thinking-out-loud preambles."""
     preamble_pattern = re.compile(
         r'^(you (want|are asking|would like|seem|mentioned)|'
         r'based on|according to|sure[,!]|of course[,!]|'
@@ -26,6 +27,11 @@ def _strip_preamble(text: str) -> str:
     )
     cleaned = preamble_pattern.sub('', text.strip())
     return cleaned.strip() or text.strip()
+
+def _estimate_tokens(text: str) -> int:
+    return len(text) // 4
+
+import time
 
 logger = logging.getLogger("chatbot.routers.chatbot_routes")
 router = APIRouter(prefix="/chat", tags=["chatbot"])
@@ -49,7 +55,7 @@ async def log_failed_question(domain_id: str, question: str, ai_response: str, r
         await session.commit()
 
 
-async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: int = 5):
+async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: int = 5) -> list[KnowledgeSource]:
     """
     Full-text search over FAQQuestion.question + answer + aliases,
     scoped to the domain via domain_categories.
@@ -91,16 +97,17 @@ async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: i
     faqs = res.scalars().all()
 
     return [
-        {
-            "payload": {
+        KnowledgeSource(
+            id=f"faq_{faq.id}",
+            source_type="FAQ",
+            score=0.92,  # FIX #12: FTS score 0.92 — above LLM threshold but below fast-path
+            content=f"{faq.question}\n\n{faq.answer}",
+            metadata={
+                "question_id": faq.id,
                 "question": faq.question,
                 "answer": faq.answer,
-                "text": f"Q: {faq.question}\nA: {faq.answer}"
-            },
-            # FIX #12: FTS score 0.92 — above LLM threshold but below fast-path,
-            # so FTS hits still go through LLM for natural phrasing
-            "score": 0.92
-        }
+            }
+        )
         for faq in faqs
     ]
 
@@ -269,16 +276,21 @@ async def ask_chatbot(
     knowledge_sources.sort(key=lambda x: x.score, reverse=True)
     top_sources = knowledge_sources[:5]
 
-    retrieval_summary = [{"type": src.source_type, "score": round(src.score, 4)} for src in top_sources]
-    logger.info({
+    faq_count = sum(1 for src in top_sources if src.source_type == "FAQ")
+    doc_count = sum(1 for src in top_sources if src.source_type == "Document")
+    
+    base_log = {
         "event": "RETRIEVAL_SUMMARY",
         "question": request.message,
-        "results": retrieval_summary,
-        "total": len(top_sources)
-    })
+        "embedding_generated": not bool(await redis_service.get_cached_embedding(q_hash)),
+        "faq_results": faq_count,
+        "document_results": doc_count,
+        "merged": len(top_sources)
+    }
 
     if not top_sources:
-        logger.info({"event": "NO_MATCH", "question": request.message, "resolved": resolved_query})
+        base_log["reason"] = "NO_MATCH"
+        logger.info(base_log)
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, fallback, "NO_MATCH")
         return {"answer": fallback, "cached": False, "sources": 0}
 
@@ -288,21 +300,33 @@ async def ask_chatbot(
     if max_score >= 0.95:
         fast_answer = top_sources[0].metadata.get("answer")
         if fast_answer:
-            logger.info({"event": "FAST_PATH", "question": request.message, "score": max_score})
+            base_log["reason"] = "FAST_PATH"
+            base_log["score"] = max_score
+            logger.info(base_log)
             background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": fast_answer}, 3600)
             return {"answer": fast_answer, "cached": False, "sources": 1, "fast_path": True}
 
     # 6. Early exit
     if max_score < 0.60:
-        logger.info({"event": "LOW_CONFIDENCE", "question": request.message, "score": max_score})
+        base_log["reason"] = "LOW_CONFIDENCE"
+        base_log["score"] = max_score
+        logger.info(base_log)
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, fallback, "LOW_CONFIDENCE")
         return {"answer": fallback, "cached": False, "sources": len(top_sources)}
 
     # 7. LLM path
     context_parts = []
     for i, item in enumerate(top_sources, 1):
-        context_parts.append(f"Source {i} ({item.source_type})\n{item.content}")
-    context_text = "\n\n".join(context_parts)
+        context_parts.append(
+            f"--------------------------------\n"
+            f"Source {i}\n"
+            f"Type\n"
+            f"{item.source_type}\n"
+            f"Content\n"
+            f"{item.content}\n"
+            f"--------------------------------"
+        )
+    context_text = "\n".join(context_parts)
 
     history_text = ""
     if chat_history:
@@ -315,38 +339,49 @@ async def ask_chatbot(
         f"You are a helpful AI assistant for {domain.domain_name}.\n"
         f"Use ONLY the supplied Knowledge Base.\n"
         f"The Knowledge Base is reference material.\n"
-        f"Do NOT copy it verbatim.\n"
-        f"Answer ONLY the user's question.\n"
-        f"Extract only the information necessary.\n"
-        f"If additional information exists in the Knowledge Base but was not requested, omit it.\n"
+        f"Extract only the information required to answer the user's question.\n"
+        f"Do NOT repeat entire FAQ answers or document chunks unless absolutely necessary.\n"
+        f"Do NOT mention where the information came from.\n"
+        f"If only part of the retrieved content answers the question, return only that part.\n"
         f"Keep responses concise.\n"
-        f"Do not invent information.\n"
-        f"If the answer cannot be found in the Knowledge Base, return exactly:\n"
-        f"\"{fallback}\"\n\n"
+        f"Correct obvious spelling mistakes.\n"
+        f"If the Knowledge Base does not contain the answer, return EXACTLY:\n"
+        f"\"{fallback}\"\n"
+        f"Never guess.\n"
+        f"Never use outside knowledge.\n\n"
         f"Example\n\n"
         f"Knowledge Base\n\n"
-        f"Question:\n"
+        f"--------------------------------\n"
+        f"Source 1\n"
+        f"Type\n"
+        f"FAQ\n"
+        f"Content\n"
         f"What is your name and age?\n\n"
-        f"Answer:\n"
-        f"I'm Raveen and I'm 20 years old.\n\n"
+        f"I'm Raveen and I'm 20 years old.\n"
+        f"--------------------------------\n\n"
         f"User:\n"
         f"How old are you?\n\n"
         f"Assistant:\n"
         f"20 years old.\n\n"
         f"Second example\n\n"
         f"Knowledge Base\n\n"
-        f"Question:\n"
-        f"What is your name and age?\n\n"
-        f"Answer:\n"
-        f"I'm Raveen and I'm 20 years old.\n\n"
+        f"--------------------------------\n"
+        f"Source 1\n"
+        f"Type\n"
+        f"FAQ\n"
+        f"Content\n"
+        f"Where is your office?\n\n"
+        f"We are located in Chennai.\n"
+        f"--------------------------------\n\n"
         f"User:\n"
-        f"What is your name?\n\n"
+        f"Where are you located?\n\n"
         f"Assistant:\n"
-        f"Raveen.\n\n"
+        f"Chennai.\n\n"
         f"{history_text}\n\n"
-        f"Knowledge Base:\n{context_text}"
+        f"Knowledge Base\n\n{context_text}"
     )
 
+    start_time = time.time()
     try:
         answer = await ollama_service.generate_response(
             system_prompt=system_prompt,
@@ -355,6 +390,8 @@ async def ask_chatbot(
         answer = _strip_preamble(answer)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
+        
+    duration = time.time() - start_time
 
     if fallback.lower() in answer.lower() or "i don't have enough information" in answer.lower():
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, "LLM_FAILURE")
@@ -366,5 +403,10 @@ async def ask_chatbot(
             background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, answer)
         path = "LLM_PATH"
 
-    logger.info({"event": path, "question": request.message, "score": max_score})
-    return {"answer": answer, "cached": False, "sources": len(top_chunks)}
+    base_log["prompt_tokens"] = _estimate_tokens(system_prompt) + _estimate_tokens(request.message)
+    base_log["llm_response_time"] = f"{duration:.1f}s"
+    base_log["reason"] = path
+    base_log["score"] = max_score
+    logger.info(base_log)
+    
+    return {"answer": answer, "cached": False, "sources": len(top_sources)}

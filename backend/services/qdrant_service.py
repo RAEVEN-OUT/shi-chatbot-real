@@ -6,8 +6,10 @@ from qdrant_client.models import (
     FilterSelector
 )
 from core.config import settings
+from schemas.retrieval import KnowledgeSource
 import asyncio
 import uuid
+import hashlib
 
 
 class QdrantService:
@@ -114,7 +116,7 @@ class QdrantService:
         category_ids: list[str] = None,
         domain_id: str = None,
         limit: int = 5
-    ) -> list[dict]:
+    ) -> list[KnowledgeSource]:
         """
         Search with tenant isolation + category scoping.
 
@@ -144,7 +146,24 @@ class QdrantService:
                 limit=limit,
                 search_params=SearchParams(hnsw_ef=128)
             )
-            return [{"payload": hit.payload, "score": hit.score} for hit in results]
+            sources = []
+            for hit in results:
+                p = hit.payload
+                faq_id = p.get("question_id")
+                if faq_id:
+                    src_id = f"faq_{faq_id}"
+                else:
+                    text_content = f"{p.get('question', '')}\n\n{p.get('answer', '')}"
+                    src_id = hashlib.sha256(text_content.encode('utf-8')).hexdigest()
+                    
+                sources.append(KnowledgeSource(
+                    id=src_id,
+                    source_type="FAQ",
+                    score=hit.score,
+                    content=f"{p.get('question', '')}\n\n{p.get('answer', '')}",
+                    metadata=p
+                ))
+            return sources
 
         # ── Document chunk search (runs in parallel when domain_id available) ─
         async def _search_documents():
@@ -164,24 +183,107 @@ class QdrantService:
                 limit=limit,
                 search_params=SearchParams(hnsw_ef=128)
             )
-            return [{"payload": hit.payload, "score": hit.score} for hit in results]
+            sources = []
+            for hit in results:
+                p = hit.payload
+                doc_id = p.get("document_source_id")
+                chunk_idx = p.get("chunk_index")
+                
+                text_content = p.get("text", "")
+                if doc_id and chunk_idx is not None:
+                    src_id = f"doc_{doc_id}_{chunk_idx}"
+                else:
+                    src_id = hashlib.sha256(text_content.encode('utf-8')).hexdigest()
+                    
+                sources.append(KnowledgeSource(
+                    id=src_id,
+                    source_type="Document",
+                    score=hit.score,
+                    content=text_content,
+                    metadata=p
+                ))
+            return sources
 
         faq_results, doc_results = await asyncio.gather(
             _search_faq(), _search_documents()
         )
 
-        # Merge: de-duplicate on text prefix, keep highest score
+        # Merge: de-duplicate on exact ID, keep highest score
         seen: set[str] = set()
-        merged: list[dict] = []
-        for hit in sorted(faq_results + doc_results, key=lambda x: x["score"], reverse=True):
-            key = (hit["payload"].get("question") or hit["payload"].get("text", ""))[:100].lower()
-            if key not in seen:
-                seen.add(key)
-                merged.append(hit)
+        merged: list[KnowledgeSource] = []
+        for source in sorted(faq_results + doc_results, key=lambda x: x.score, reverse=True):
+            if source.id not in seen:
+                seen.add(source.id)
+                merged.append(source)
             if len(merged) >= limit:
                 break
 
         return merged
+
+    async def expand_document_chunks(
+        self,
+        tenant_id: str,
+        sources: list[KnowledgeSource]
+    ) -> dict[tuple[str, int], str]:
+        """
+        Fetches adjacent chunks (idx - 1, idx + 1) for a list of document sources.
+        Returns a dict mapping (document_source_id, chunk_index) -> text.
+        """
+        doc_expansions = {}
+        for src in sources:
+            if src.source_type == "Document":
+                doc_id = src.metadata.get("document_source_id")
+                idx = src.metadata.get("chunk_index")
+                if doc_id and idx is not None:
+                    doc_expansions.setdefault(doc_id, set()).update([idx - 1, idx + 1])
+                    
+        if not doc_expansions:
+            return {}
+            
+        should_conditions = []
+        for doc_id, indices in doc_expansions.items():
+            valid_indices = [i for i in indices if i >= 0]
+            if valid_indices:
+                should_conditions.append(
+                    Filter(
+                        must=[
+                            FieldCondition(key="document_source_id", match=MatchValue(value=doc_id)),
+                            FieldCondition(key="chunk_index", match=MatchAny(any=valid_indices))
+                        ]
+                    )
+                )
+                
+        if not should_conditions:
+            return {}
+            
+        final_filter = Filter(
+            must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))],
+            should=should_conditions
+        )
+        
+        total_requested = sum(len(indices) for indices in doc_expansions.values())
+        
+        try:
+            results, _ = await self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=final_filter,
+                limit=total_requested,
+                with_payload=True,
+                with_vectors=False
+            )
+        except Exception:
+            return {}
+            
+        expansion_map = {}
+        for hit in results:
+            p = hit.payload
+            doc_id = p.get("document_source_id")
+            chunk_idx = p.get("chunk_index")
+            text = p.get("text")
+            if doc_id and chunk_idx is not None and text:
+                expansion_map[(doc_id, chunk_idx)] = text
+                
+        return expansion_map
 
 
 qdrant_service = QdrantService()

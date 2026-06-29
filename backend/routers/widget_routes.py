@@ -24,6 +24,12 @@ def _strip_preamble(text: str) -> str:
     cleaned = preamble_pattern.sub('', text.strip())
     return cleaned.strip() or text.strip()
 
+MAX_CONTEXT_TOKENS = 3000
+
+def _estimate_tokens(text: str) -> int:
+    return len(text) // 4
+
+import time
 from database.database import get_db, AsyncSessionLocal
 from database.models import Domain, ChatSession, ChatMessage, Lead, FailedQuestion, DomainCategory
 from services.qdrant_service import qdrant_service
@@ -654,7 +660,7 @@ async def widget_chat_websocket(
                             query_vector=query_vector,
                             category_ids=category_ids,
                             domain_id=domain.id,
-                            limit=3
+                            limit=15
                         )
                     except Exception as e:
                         logger.error(f"Qdrant search error: {e}")
@@ -662,7 +668,7 @@ async def widget_chat_websocket(
 
                 async def _fts():
                     try:
-                        return await search_faqs_fts(search_db, domain.id, resolved_query, limit=3)
+                        return await search_faqs_fts(search_db, domain.id, resolved_query, limit=5)
                     except Exception as e:
                         logger.error(f"FTS search error: {e}")
                         return []
@@ -673,51 +679,67 @@ async def widget_chat_websocket(
                         _fts()
                     )
 
-                # Merge: FTS first (exact keyword wins), then semantic
+                # Merge candidates and remove duplicates
                 seen = set()
-                knowledge_sources = []
-                for chunk in fts_chunks + qdrant_chunks:
-                    p = chunk.get("payload", {})
+                candidates = []
+                for source in fts_chunks + qdrant_chunks:
+                    if source.id not in seen:
+                        seen.add(source.id)
+                        candidates.append(source)
+
+                # Diversity Ranking (MMR-style penalty for chunks from the same document)
+                top_sources = []
+                selected_docs = {}
+                
+                while candidates and len(top_sources) < 5:
+                    best_idx = 0
+                    best_score = float('-inf')
                     
-                    if p.get("question_id"):
-                        key = f"faq_{p['question_id']}"
-                    elif p.get("document_source_id") and p.get("chunk_index") is not None:
-                        key = f"doc_{p['document_source_id']}_{p['chunk_index']}"
-                    else:
-                        text = p.get("question") or p.get("text", "")
-                        key = hashlib.sha256(text.encode('utf-8')).hexdigest()
+                    for i, src in enumerate(candidates):
+                        current_score = src.score
                         
-                    if key not in seen:
-                        seen.add(key)
-                        if "answer" in p:
-                            content = f"Question:\n{p.get('question', '')}\nAnswer:\n{p['answer']}"
-                            source_type = "FAQ"
-                        else:
-                            content = p.get("text", "")
-                            source_type = "Document"
+                        if src.source_type == "Document":
+                            doc_id = src.metadata.get("document_source_id")
+                            chunk_idx = src.metadata.get("chunk_index")
                             
-                        knowledge_sources.append(KnowledgeSource(
-                            id=key,
-                            source_type=source_type,
-                            score=chunk.get("score", 0),
-                            content=content,
-                            metadata=p
-                        ))
+                            if doc_id and doc_id in selected_docs:
+                                current_score -= 0.05  # Base penalty for same document
+                                
+                                if chunk_idx is not None:
+                                    for picked_idx in selected_docs[doc_id]:
+                                        if abs(picked_idx - chunk_idx) <= 2:
+                                            current_score -= 0.10  # Additional penalty for adjacent chunks
+                                            break
+                        
+                        if current_score > best_score:
+                            best_score = current_score
+                            best_idx = i
+                            
+                    winner = candidates.pop(best_idx)
+                    top_sources.append(winner)
+                    
+                    if winner.source_type == "Document":
+                        doc_id = winner.metadata.get("document_source_id")
+                        chunk_idx = winner.metadata.get("chunk_index")
+                        if doc_id:
+                            selected_docs.setdefault(doc_id, []).append(chunk_idx if chunk_idx is not None else -999)
 
-                knowledge_sources.sort(key=lambda x: x.score, reverse=True)
-                top_sources = knowledge_sources[:5]
-
-                retrieval_summary = [{"type": src.source_type, "score": round(src.score, 4)} for src in top_sources]
-                logger.info({
+                faq_count = sum(1 for src in top_sources if src.source_type == "FAQ")
+                doc_count = sum(1 for src in top_sources if src.source_type == "Document")
+                
+                base_log = {
                     "event": "RETRIEVAL_SUMMARY",
                     "question": user_msg,
-                    "results": retrieval_summary,
-                    "total": len(top_sources)
-                })
+                    "embedding_generated": need_cache_embedding,
+                    "faq_results": faq_count,
+                    "document_results": doc_count,
+                    "merged": len(top_sources)
+                }
 
                 # ── No match ───────────────────────────────────────────────────
                 if not top_sources:
-                    logger.info({"event": "NO_MATCH", "question": user_msg, "resolved": resolved_query})
+                    base_log["reason"] = "NO_MATCH"
+                    logger.info(base_log)
                     await websocket.send_json({"type": "stream_delta", "text": fallback})
                     await websocket.send_json({"type": "stream_done"})
                     asyncio.create_task(run_background_chat_updates(
@@ -737,13 +759,9 @@ async def widget_chat_websocket(
                 if max_score >= 0.95:
                     fast_answer = top_sources[0].metadata.get("answer")
                     if fast_answer:
-                        logger.info({
-                            "event": "FAST_PATH",
-                            "question": user_msg,
-                            "resolved": resolved_query,
-                            "score": max_score,
-                            "matched": top_sources[0].metadata.get("question")
-                        })
+                        base_log["reason"] = "FAST_PATH"
+                        base_log["score"] = max_score
+                        logger.info(base_log)
                         await websocket.send_json({"type": "stream_delta", "text": fast_answer})
                         await websocket.send_json({"type": "stream_done"})
                         asyncio.create_task(run_background_chat_updates(
@@ -759,12 +777,9 @@ async def widget_chat_websocket(
 
                 # ── Early exit < 0.60 ──────────────────────────────────────────
                 if max_score < 0.60:
-                    logger.info({
-                        "event": "LOW_CONFIDENCE",
-                        "question": user_msg,
-                        "resolved": resolved_query,
-                        "score": max_score
-                    })
+                    base_log["reason"] = "LOW_CONFIDENCE"
+                    base_log["score"] = max_score
+                    logger.info(base_log)
                     await websocket.send_json({"type": "stream_delta", "text": fallback})
                     await websocket.send_json({"type": "stream_done"})
                     asyncio.create_task(run_background_chat_updates(
@@ -779,12 +794,54 @@ async def widget_chat_websocket(
                     continue
 
                 # ── LLM RAG path (0.60 – 0.95) ────────────────────────────────
+                
+                # Context Expansion
+                try:
+                    expansions = await qdrant_service.expand_document_chunks(domain.organization_id, top_sources)
+                except Exception as e:
+                    logger.error(f"Context expansion error: {e}")
+                    expansions = {}
 
-                # FIX #9: build context from answer field, not raw Q:A text blob
                 context_parts = []
+                current_tokens = 0
+                
                 for i, item in enumerate(top_sources, 1):
-                    context_parts.append(f"Source {i} ({item.source_type})\n{item.content}")
-                context_text = "\n\n".join(context_parts)
+                    item_text = item.content
+                    
+                    if item.source_type == "Document":
+                        doc_id = item.metadata.get("document_source_id")
+                        chunk_idx = item.metadata.get("chunk_index")
+                        
+                        if doc_id and chunk_idx is not None:
+                            prev_text = expansions.get((doc_id, chunk_idx - 1))
+                            next_text = expansions.get((doc_id, chunk_idx + 1))
+                            
+                            if prev_text:
+                                prev_tokens = _estimate_tokens(prev_text)
+                                if current_tokens + _estimate_tokens(item_text) + prev_tokens <= MAX_CONTEXT_TOKENS:
+                                    item_text = prev_text + "\n\n" + item_text
+                                    
+                            if next_text:
+                                next_tokens = _estimate_tokens(next_text)
+                                if current_tokens + _estimate_tokens(item_text) + next_tokens <= MAX_CONTEXT_TOKENS:
+                                    item_text = item_text + "\n\n" + next_text
+                                    
+                    item_tokens = _estimate_tokens(item_text)
+                    if current_tokens + item_tokens > MAX_CONTEXT_TOKENS and current_tokens > 0:
+                        break
+                        
+                    current_tokens += item_tokens
+                    context_parts.append(
+                        f"--------------------------------\n"
+                        f"Source {i}\n"
+                        f"Type\n"
+                        f"{item.source_type}\n"
+                        f"Content\n"
+                        f"{item_text}\n"
+                        f"--------------------------------"
+                    )
+                    
+                context_text = "\n".join(context_parts)
 
                 # Build prompt with summary + recent history
                 prompt_parts = []
@@ -798,45 +855,56 @@ async def widget_chat_websocket(
                         hist_lines.append(f"{role}: {m.message}")
                     prompt_parts.append("Recent conversation:\n" + "\n".join(hist_lines))
 
-                prompt_parts.append(f"Knowledge base:\n{context_text}")
+                prompt_parts.append(f"Knowledge Base\n\n{context_text}")
                 prompt_context = "\n\n".join(prompt_parts)
 
                 system_prompt = (
                     f"You are a helpful AI assistant for {domain.domain_name}.\n"
                     f"Use ONLY the supplied Knowledge Base.\n"
                     f"The Knowledge Base is reference material.\n"
-                    f"Do NOT copy it verbatim.\n"
-                    f"Answer ONLY the user's question.\n"
-                    f"Extract only the information necessary.\n"
-                    f"If additional information exists in the Knowledge Base but was not requested, omit it.\n"
+                    f"Extract only the information required to answer the user's question.\n"
+                    f"Do NOT repeat entire FAQ answers or document chunks unless absolutely necessary.\n"
+                    f"Do NOT mention where the information came from.\n"
+                    f"If only part of the retrieved content answers the question, return only that part.\n"
                     f"Keep responses concise.\n"
-                    f"Do not invent information.\n"
-                    f"If the answer cannot be found in the Knowledge Base, return exactly:\n"
-                    f"\"{fallback}\"\n\n"
+                    f"Correct obvious spelling mistakes.\n"
+                    f"If the Knowledge Base does not contain the answer, return EXACTLY:\n"
+                    f"\"{fallback}\"\n"
+                    f"Never guess.\n"
+                    f"Never use outside knowledge.\n\n"
                     f"Example\n\n"
                     f"Knowledge Base\n\n"
-                    f"Question:\n"
+                    f"--------------------------------\n"
+                    f"Source 1\n"
+                    f"Type\n"
+                    f"FAQ\n"
+                    f"Content\n"
                     f"What is your name and age?\n\n"
-                    f"Answer:\n"
-                    f"I'm Raveen and I'm 20 years old.\n\n"
+                    f"I'm Raveen and I'm 20 years old.\n"
+                    f"--------------------------------\n\n"
                     f"User:\n"
                     f"How old are you?\n\n"
                     f"Assistant:\n"
                     f"20 years old.\n\n"
                     f"Second example\n\n"
                     f"Knowledge Base\n\n"
-                    f"Question:\n"
-                    f"What is your name and age?\n\n"
-                    f"Answer:\n"
-                    f"I'm Raveen and I'm 20 years old.\n\n"
+                    f"--------------------------------\n"
+                    f"Source 1\n"
+                    f"Type\n"
+                    f"FAQ\n"
+                    f"Content\n"
+                    f"Where is your office?\n\n"
+                    f"We are located in Chennai.\n"
+                    f"--------------------------------\n\n"
                     f"User:\n"
-                    f"What is your name?\n\n"
+                    f"Where are you located?\n\n"
                     f"Assistant:\n"
-                    f"Raveen.\n\n"
+                    f"Chennai.\n\n"
                     f"{prompt_context}"
                 )
 
                 # ── Stream tokens ──────────────────────────────────────────────
+                start_time = time.time()
                 full_answer = ""
                 try:
                     async for token in ollama_service.generate_response_stream(
@@ -849,6 +917,7 @@ async def widget_chat_websocket(
 
                     await websocket.send_json({"type": "stream_done"})
                     full_answer = _strip_preamble(full_answer)
+                    duration = time.time() - start_time
 
                     failure_reason = None
                     if (
@@ -860,13 +929,11 @@ async def widget_chat_websocket(
                     else:
                         display_answer = full_answer
 
-                    logger.info({
-                        "event": failure_reason or "LLM_PATH",
-                        "question": user_msg,
-                        "resolved": resolved_query,
-                        "score": max_score,
-                        "matched": top_chunks[0].get("payload", {}).get("question")
-                    })
+                    base_log["prompt_tokens"] = _estimate_tokens(system_prompt) + _estimate_tokens(user_msg)
+                    base_log["llm_response_time"] = f"{duration:.1f}s"
+                    base_log["reason"] = failure_reason or "LLM_PATH"
+                    base_log["score"] = max_score
+                    logger.info(base_log)
 
                     asyncio.create_task(run_background_chat_updates(
                         domain_id=domain.id,
