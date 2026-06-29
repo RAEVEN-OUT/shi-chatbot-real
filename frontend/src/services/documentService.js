@@ -13,7 +13,7 @@ export async function uploadDocument(file, domainId = null, sourceTitle = null) 
   if (sourceTitle) formData.append("source_title", sourceTitle);
 
   const token = await import('@/firebase/config').then(m => m.auth.currentUser?.getIdToken());
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
   const rawRes = await fetch(`${apiUrl}/documents/upload`, {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${token}` },

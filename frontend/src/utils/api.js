@@ -8,7 +8,7 @@ const getBaseURL = () => {
   if (typeof import.meta !== 'undefined' && import.meta && import.meta.env && import.meta.env.VITE_API_URL) {
     return import.meta.env.VITE_API_URL;
   }
-  return 'http://localhost:8000';
+  return 'http://localhost:8000/api';
 };
 
 const api = axios.create({

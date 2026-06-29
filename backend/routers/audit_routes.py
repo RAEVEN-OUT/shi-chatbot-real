@@ -6,7 +6,7 @@ from core.firebase_auth import get_current_user
 from firebase_admin import firestore
 
 logger = logging.getLogger("chatbot.routers.audit")
-router = APIRouter(prefix="", tags=["Audit Logs"])
+router = APIRouter(prefix="/api", tags=["Audit Logs"])
 
 @router.get("/audit-logs")
 async def list_audit_logs(

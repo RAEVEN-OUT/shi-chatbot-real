@@ -5,7 +5,7 @@ from core.firebase_auth import verify_firebase_token
 from database.database import get_db
 from database.models import User, Organization
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.post("/login")
 async def login(

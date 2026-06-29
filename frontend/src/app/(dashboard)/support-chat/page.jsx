@@ -34,7 +34,7 @@ export default function SupportChat() {
     const connectWs = async () => {
       const baseUrl = (process.env.NEXT_PUBLIC_WITHOUT_API_URL || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '') || window.location.origin).trim();
       const token = await auth.currentUser?.getIdToken();
-      const wsUrl = `${baseUrl.replace(/^https?/, match => match === 'https' ? 'wss' : 'ws')}/ws/support/${activeUid}?token=${token}`;
+      const wsUrl = `${baseUrl.replace(/^https?/, match => match === 'https' ? 'wss' : 'ws')}/api/ws/support/${activeUid}?token=${token}`;
       
       const socket = new WebSocket(wsUrl);
       

@@ -34,7 +34,7 @@ def _estimate_tokens(text: str) -> int:
 import time
 
 logger = logging.getLogger("chatbot.routers.chatbot_routes")
-router = APIRouter(prefix="/chat", tags=["chatbot"])
+router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 
 
 class ChatRequest(BaseModel):

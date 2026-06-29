@@ -15,8 +15,8 @@ from database.models import ChatSession, ChatMessage, Domain
 from utils.ws_manager import manager
 from services.redis_service import redis_service
 
-router = APIRouter(prefix="/chat-sessions", tags=["chat_sessions"])
-notifications_router = APIRouter(prefix="/notifications", tags=["notifications"])
+router = APIRouter(prefix="/api/chat-sessions", tags=["chat_sessions"])
+notifications_router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 admin_ws_router = APIRouter(prefix="/api/ws/admin", tags=["admin_ws"])
 
 

@@ -31,7 +31,7 @@ from services.redis_service import redis_service
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
 # ── Pydantic Schemas ──────────────────────────────────────────────────────────

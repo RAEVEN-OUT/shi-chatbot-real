@@ -8,8 +8,8 @@ from core.firebase_auth import require_subscriber
 from pydantic import BaseModel
 from services.audit_service import log_action
 
-router = APIRouter(prefix="/failed-questions", tags=["Failed Questions"])
-spam_router = APIRouter(prefix="/spam-questions", tags=["Spam Questions"])
+router = APIRouter(prefix="/api/failed-questions", tags=["Failed Questions"])
+spam_router = APIRouter(prefix="/api/spam-questions", tags=["Spam Questions"])
 
 class BulkDeleteRequest(BaseModel):
     ids: list[str]

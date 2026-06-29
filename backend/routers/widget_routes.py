@@ -54,6 +54,50 @@ class LeadCapture(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Validation Helper
+# ---------------------------------------------------------------------------
+import os
+from urllib.parse import urlparse
+
+def verify_domain_origin(headers, expected_domain_url: str, widget_key: str, client_ip: str) -> bool:
+    origin = headers.get("origin")
+    
+    if not origin:
+        logger.warning(f"Widget Validation Failed: Missing Origin header. Key: {widget_key}, IP: {client_ip}")
+        return False
+        
+    try:
+        parsed_origin = urlparse(origin)
+        origin_host = parsed_origin.netloc.split(":")[0].lower() if parsed_origin.netloc else parsed_origin.path.split("/")[0].split(":")[0].lower()
+        
+        allow_localhost = os.getenv("ALLOW_LOCALHOST_WIDGETS", "true").lower() == "true"
+        if allow_localhost and origin_host in ["localhost", "127.0.0.1"]:
+            return True
+            
+        if not expected_domain_url:
+            return False
+            
+        if not expected_domain_url.startswith("http://") and not expected_domain_url.startswith("https://"):
+            expected_domain_url = "https://" + expected_domain_url
+            
+        parsed_expected = urlparse(expected_domain_url)
+        expected_host = parsed_expected.netloc.split(":")[0].lower()
+        
+        if origin_host == expected_host:
+            return True
+            
+        allow_subdomains = os.getenv("ALLOW_WIDGET_SUBDOMAINS", "true").lower() == "true"
+        if allow_subdomains and origin_host.endswith("." + expected_host):
+            return True
+            
+        logger.warning(f"Widget Validation Failed: Origin '{origin_host}' does not match '{expected_host}'. Key: {widget_key}, IP: {client_ip}")
+        return False
+        
+    except Exception as e:
+        logger.warning(f"Widget Validation Error: {e}. Key: {widget_key}, IP: {client_ip}")
+        return False
+
+# ---------------------------------------------------------------------------
 # REST endpoints
 # ---------------------------------------------------------------------------
 
@@ -91,6 +135,10 @@ async def widget_config(
                 }
             }
         raise HTTPException(status_code=404, detail="Widget domain not found.")
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not verify_domain_origin(request.headers, domain.domain_name, x_api_key, client_ip):
+        raise HTTPException(status_code=403, detail="Origin not authorized for this widget key.")
 
     settings_data = domain.settings or {}
     forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
@@ -141,6 +189,7 @@ async def widget_config(
 
 @router.post("/lead")
 async def capture_lead(
+    request: Request,
     lead: LeadCapture,
     x_api_key: str = Header(..., alias="X-API-Key"),
     db: AsyncSession = Depends(get_db)
@@ -152,6 +201,10 @@ async def capture_lead(
     domain = result.scalar_one_or_none()
     if not domain:
         raise HTTPException(status_code=404, detail="Widget domain not found.")
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not verify_domain_origin(request.headers, domain.domain_name, x_api_key, client_ip):
+        raise HTTPException(status_code=403, detail="Origin not authorized for this widget key.")
 
     new_lead = Lead(
         domain_id=domain.id,
@@ -393,6 +446,12 @@ async def widget_chat_websocket(
         if not domain:
             await websocket.send_json({"type": "error", "text": "Invalid domain"})
             await websocket.close()
+            return
+
+        client_ip = websocket.client.host if websocket.client else "unknown"
+        if not verify_domain_origin(websocket.headers, domain.domain_name, domain_id, client_ip):
+            await websocket.send_json({"type": "error", "text": "Origin not authorized"})
+            await websocket.close(code=4003)
             return
 
         # Resolve fallback once per connection

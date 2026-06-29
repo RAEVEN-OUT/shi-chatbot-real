@@ -6,7 +6,7 @@ from typing import Dict
 
 from core.firebase_auth import require_subscriber
 
-router = APIRouter(tags=["upload"])
+router = APIRouter(prefix="/api", tags=["upload"])
 
 # Directory to store uploaded logos
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "public", "logos")

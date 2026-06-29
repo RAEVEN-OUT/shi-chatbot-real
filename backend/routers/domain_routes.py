@@ -11,7 +11,7 @@ from database.models import Domain, RetrainingJob, DomainCategory, FAQCategory
 from services.redis_service import redis_service
 from services.audit_service import log_action
 
-router = APIRouter(prefix="/domains", tags=["domains"])
+router = APIRouter(prefix="/api/domains", tags=["domains"])
 
 class DomainCreate(BaseModel):
     name: str

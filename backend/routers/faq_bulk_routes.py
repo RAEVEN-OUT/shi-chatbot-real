@@ -15,7 +15,7 @@ from services.ollama_service import ollama_service
 from services.audit_service import log_action
 
 logger = logging.getLogger("chatbot.routers.faq_bulk")
-router = APIRouter(prefix="/faq-hierarchy", tags=["FAQ Hierarchy"])
+router = APIRouter(prefix="/api/faq-hierarchy", tags=["FAQ Hierarchy"])
 
 
 class BulkFAQRow(BaseModel):

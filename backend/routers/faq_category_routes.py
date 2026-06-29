@@ -10,7 +10,7 @@ from database.models import FAQCategory, FAQQuestion
 from services.qdrant_service import qdrant_service
 from services.audit_service import log_action
 
-router = APIRouter(prefix="/faq-categories", tags=["faq_categories"])
+router = APIRouter(prefix="/api/faq-categories", tags=["faq_categories"])
 
 class FAQCategoryCreate(BaseModel):
     faq_title: str

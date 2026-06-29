@@ -13,7 +13,7 @@ from services.ollama_service import ollama_service
 from services.qdrant_service import qdrant_service
 from services.audit_service import log_action
 
-router = APIRouter(prefix="/faq-questions", tags=["faq_questions"])
+router = APIRouter(prefix="/api/faq-questions", tags=["faq_questions"])
 
 class FAQQuestionCreate(BaseModel):
     faq_id: str

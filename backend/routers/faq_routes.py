@@ -8,7 +8,7 @@ from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
 from services.redis_service import redis_service
 
-router = APIRouter(prefix="/faqs", tags=["faqs"])
+router = APIRouter(prefix="/api/faqs", tags=["faqs"])
 
 class FAQCreate(BaseModel):
     domain_id: str

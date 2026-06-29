@@ -492,7 +492,7 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
       }
 
       const token = await import('@/firebase/config').then(m => m.auth.currentUser?.getIdToken());
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
       const rawRes = await fetch(`${apiUrl}/documents/upload`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },

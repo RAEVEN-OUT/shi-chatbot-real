@@ -8,7 +8,7 @@ from core.firebase_auth import require_subscriber
 from database.database import get_db
 from database.models import ChatSession, ChatMessage, FailedQuestion, Lead, Domain
 
-router = APIRouter(prefix="/analytics", tags=["analytics"])
+router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 @router.get("/summary")
 async def get_analytics_summary(

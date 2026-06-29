@@ -7,7 +7,7 @@ from core.firebase_auth import require_subscriber
 from database.database import get_db
 from database.models import Lead, Domain
 
-router = APIRouter(prefix="/leads", tags=["leads"])
+router = APIRouter(prefix="/api/leads", tags=["leads"])
 
 @router.get("")
 async def list_leads(

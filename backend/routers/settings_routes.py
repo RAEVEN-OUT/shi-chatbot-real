@@ -8,7 +8,7 @@ from core.firebase_auth import require_subscriber
 from database.database import get_db
 from database.models import Domain
 
-router = APIRouter(tags=["settings"])
+router = APIRouter(prefix="/api", tags=["settings"])
 
 class StyleConfig(BaseModel):
     theme_color: Optional[str] = None
