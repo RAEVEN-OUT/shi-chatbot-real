@@ -62,3 +62,30 @@ The app relies on Ollama for LLM and text embeddings.
    npm run dev
    ```
    * Access App: [http://localhost:3000](http://localhost:3000)
+
+
+Complete deployment workflow
+
+Whenever you make code changes:
+
+On your PC
+Edit code
+↓
+git add .
+git commit -m "..."
+git push origin main
+On the server
+cd /opt/shi-chatbot-real
+
+git pull origin main
+
+cd frontend
+npm install          # if needed
+npm run build
+
+cd ../backend
+source venv/bin/activate
+pip install -r requirements.txt   # if needed
+
+sudo systemctl restart shichatbot-frontend
+sudo systemctl restart shichatbot-backend
