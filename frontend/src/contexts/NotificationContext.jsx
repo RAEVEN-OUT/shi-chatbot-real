@@ -22,9 +22,6 @@ export function NotificationProvider({ children }) {
     try {
       const res = await chatSessionService.getUnreadCount();
       const count = res?.unread_count ?? 0;
-      if (!isFirstFetchRef.current && count > prevUnreadRef.current) {
-        toast.info?.('New message received', 'A customer has sent a new message in live support.');
-      }
       isFirstFetchRef.current = false;
       prevUnreadRef.current = count;
       setTotalUnread(count);
@@ -62,11 +59,7 @@ export function NotificationProvider({ children }) {
             if (!isFirstFetchRef.current) {
               toast.info?.('New message received', 'A customer has sent a new message in live support.');
             }
-            setTotalUnread(prev => {
-              const next = prev + 1;
-              prevUnreadRef.current = next;
-              return next;
-            });
+            fetchUnreadCount();
           }
         }
       } catch (err) {

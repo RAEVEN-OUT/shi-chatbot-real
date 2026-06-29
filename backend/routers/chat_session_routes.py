@@ -342,5 +342,5 @@ async def get_unread_count(
     result = await db.execute(stmt)
     sessions = result.scalars().all()
 
-    total_unread = sum(s.unread_admin for s in sessions)
+    total_unread = sum(1 for s in sessions if s.unread_admin and s.unread_admin > 0)
     return {"unread_count": total_unread}

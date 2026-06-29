@@ -1,0 +1,17 @@
+[Unit]
+Description=SHI Chatbot Frontend
+After=network.target
+
+[Service]
+User=chatuser
+WorkingDirectory=/opt/shi-chatbot-real/frontend
+
+Environment=NODE_ENV=production
+
+ExecStart=/usr/bin/npm start
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

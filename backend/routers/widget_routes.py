@@ -361,7 +361,6 @@ async def run_background_chat_updates(
 # Pronoun / follow-up words that signal a query needs context rewriting
 _FOLLOWUP_WORDS = {
     "it", "that", "this", "they", "those", "he", "she", "we",
-    "how", "what", "when", "where", "why", "who",
     "more", "else", "other", "another"
 }
 
@@ -546,7 +545,6 @@ async def widget_chat_websocket(
                     
                         full_answer = ""
                         try:
-                            await websocket.send_json({"type": "stream_delta", "text": ""})
                             async for token in ollama_service.generate_response_stream(system_prompt=sys_prompt, user_query=user_msg):
                                 if token:
                                     full_answer += token
