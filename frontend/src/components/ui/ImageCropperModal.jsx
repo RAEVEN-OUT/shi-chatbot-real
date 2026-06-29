@@ -99,6 +99,9 @@ export default function ImageCropperModal({ imageSrc, onCropComplete, onCancel }
             crop={crop}
             zoom={zoom}
             aspect={1}
+            cropShape="round"
+            showGrid={false}
+            style={{ cropAreaStyle: { borderRadius: '50%' } }}
             onCropChange={setCrop}
             onCropComplete={onCropCompleteHandler}
             onZoomChange={setZoom}

@@ -43,6 +43,21 @@ class RedisService:
         """Invalidate cached domain category IDs."""
         await self.redis.delete(f"domain_categories:{domain_id}")
 
+    async def get_domain_capabilities(self, domain_id: str):
+        """Retrieve cached domain capabilities (has_faqs, has_docs)."""
+        data = await self.redis.get(f"domain_cap:{domain_id}")
+        if data:
+            return json.loads(data)
+        return None
+
+    async def set_domain_capabilities(self, domain_id: str, capabilities: dict, expire: int = 3600):
+        """Cache domain capabilities."""
+        await self.redis.set(f"domain_cap:{domain_id}", json.dumps(capabilities), ex=expire)
+        
+    async def delete_domain_capabilities(self, domain_id: str):
+        """Invalidate cached domain capabilities."""
+        await self.redis.delete(f"domain_cap:{domain_id}")
+
     async def is_rate_limited(self, widget_key: str, session_id: str, ip: str, limit: int = 100, window: int = 60) -> bool:
         """Check if client is rate limited."""
         key = f"rate:{widget_key}:{session_id}:{ip}"

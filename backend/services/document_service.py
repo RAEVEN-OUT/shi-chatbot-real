@@ -295,20 +295,34 @@ async def ingest_document(
         await status_callback("embedding")
         
     # 3. Embed all chunks and build PointStructs
-    for idx, chunk in enumerate(chunks):
-        vector = None
+    # Deduplicate chunks for embedding to avoid redundant Ollama calls
+    unique_texts = list(set(chunks))
+    text_to_vector = {}
+    
+    sem = asyncio.Semaphore(10)
+    
+    async def _embed_text(txt: str):
         for attempt in range(4):
             try:
-                vector = await ollama_service.generate_embedding(chunk)
-                break
+                async with sem:
+                    vector = await ollama_service.generate_embedding(txt)
+                return txt, vector
             except Exception as e:
                 if attempt < 3:
-                    logger.warning(f"[DocumentService] Embedding error on chunk {idx}, retrying in {2**attempt}s: {e}")
+                    logger.warning(f"[DocumentService] Embedding error, retrying in {2**attempt}s: {e}")
                     await asyncio.sleep(2 ** attempt)
                 else:
-                    logger.error(f"[DocumentService] Embedding error on chunk {idx} after 3 retries: {e}")
+                    logger.error(f"[DocumentService] Embedding error after 3 retries: {e}")
                     raise HTTPException(status_code=502, detail=f"Embedding service error: {e}")
-
+                    
+    tasks = [_embed_text(txt) for txt in unique_texts]
+    results = await asyncio.gather(*tasks)
+    
+    for txt, vector in results:
+        text_to_vector[txt] = vector
+        
+    for idx, chunk in enumerate(chunks):
+        vector = text_to_vector[chunk]
         payload = {
             "tenant_id": tenant_id,
             "domain_id": domain_id or "",

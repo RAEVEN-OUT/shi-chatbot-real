@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from pydantic import BaseModel
@@ -6,6 +6,7 @@ from database.database import get_db
 from database.models import FAQ, Domain
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
+from services.redis_service import redis_service
 
 router = APIRouter(prefix="/faqs", tags=["faqs"])
 
@@ -15,7 +16,7 @@ class FAQCreate(BaseModel):
     answer: str
 
 @router.post("/")
-async def create_faq(faq_data: FAQCreate, db: AsyncSession = Depends(get_db)):
+async def create_faq(faq_data: FAQCreate, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     # 1. Verify Domain exists
     stmt = select(Domain).where(Domain.id == faq_data.domain_id)
     result = await db.execute(stmt)
@@ -54,4 +55,5 @@ async def create_faq(faq_data: FAQCreate, db: AsyncSession = Depends(get_db)):
         # If Qdrant/Ollama fails, rollback might be necessary, but for now we just return the error.
         raise HTTPException(status_code=500, detail=f"FAQ saved to DB, but Vector sync failed: {str(e)}")
 
+    background_tasks.add_task(redis_service.delete_domain_capabilities, faq_data.domain_id)
     return {"status": "success", "faq": {"id": new_faq.id, "question": new_faq.question, "answer": new_faq.answer}}

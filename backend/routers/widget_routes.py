@@ -31,7 +31,7 @@ def _estimate_tokens(text: str) -> int:
 
 import time
 from database.database import get_db, AsyncSessionLocal
-from database.models import Domain, ChatSession, ChatMessage, Lead, FailedQuestion, DomainCategory
+from database.models import Domain, ChatSession, ChatMessage, Lead, FailedQuestion, DomainCategory, DocumentSource
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
 from services.redis_service import redis_service
@@ -653,6 +653,25 @@ async def widget_chat_websocket(
                         continue
 
                 # ── FIX #8: parallel Qdrant + FTS search ───────────────────────
+                async def get_capabilities():
+                    caps = await redis_service.get_domain_capabilities(domain.id)
+                    if caps is not None:
+                        return caps
+                    async with AsyncSessionLocal() as s:
+                        from sqlalchemy import func
+                        faq_count = await s.scalar(select(func.count(DomainCategory.category_id)).where(DomainCategory.domain_id == domain.id))
+                        doc_count = await s.scalar(select(func.count(DocumentSource.id)).where(DocumentSource.domain_id == domain.id))
+                        caps = {
+                            "has_faqs": (faq_count or 0) > 0,
+                            "has_docs": (doc_count or 0) > 0
+                        }
+                    asyncio.create_task(redis_service.set_domain_capabilities(domain.id, caps))
+                    return caps
+
+                caps = await get_capabilities()
+                has_faqs = caps.get("has_faqs", True)
+                has_docs = caps.get("has_docs", True)
+
                 async def _qdrant():
                     try:
                         return await qdrant_service.search_chunks(
@@ -660,13 +679,17 @@ async def widget_chat_websocket(
                             query_vector=query_vector,
                             category_ids=category_ids,
                             domain_id=domain.id,
-                            limit=15
+                            limit=15,
+                            skip_faq=not has_faqs,
+                            skip_docs=not has_docs
                         )
                     except Exception as e:
                         logger.error(f"Qdrant search error: {e}")
                         return []
 
                 async def _fts():
+                    if not has_faqs:
+                        return []
                     try:
                         return await search_faqs_fts(search_db, domain.id, resolved_query, limit=5)
                     except Exception as e:
@@ -775,8 +798,8 @@ async def widget_chat_websocket(
                         ))
                         continue
 
-                # ── Early exit < 0.60 ──────────────────────────────────────────
-                if max_score < 0.60:
+                # ── Early exit < 0.40 ──────────────────────────────────────────
+                if max_score < 0.40:
                     base_log["reason"] = "LOW_CONFIDENCE"
                     base_log["score"] = max_score
                     logger.info(base_log)
@@ -793,7 +816,7 @@ async def widget_chat_websocket(
                     ))
                     continue
 
-                # ── LLM RAG path (0.60 – 0.95) ────────────────────────────────
+                # ── LLM RAG path (0.40 – 0.95) ────────────────────────────────
                 
                 # Context Expansion
                 try:
@@ -861,17 +884,15 @@ async def widget_chat_websocket(
                 system_prompt = (
                     f"You are a helpful AI assistant for {domain.domain_name}.\n"
                     f"Use ONLY the supplied Knowledge Base.\n"
-                    f"The Knowledge Base is reference material.\n"
-                    f"Extract only the information required to answer the user's question.\n"
-                    f"Do NOT repeat entire FAQ answers or document chunks unless absolutely necessary.\n"
+                    f"Provide extremely sharp, concise, and highly accurate answers.\n"
+                    f"Avoid filler words, pleasantries, or lengthy explanations.\n"
+                    f"Extract only the exact information required to answer the user's question.\n"
+                    f"Do NOT repeat entire FAQ answers or document chunks. Synthesize the answer briefly.\n"
                     f"Do NOT mention where the information came from.\n"
-                    f"If only part of the retrieved content answers the question, return only that part.\n"
-                    f"Keep responses concise.\n"
-                    f"Correct obvious spelling mistakes.\n"
+                    f"Correct obvious spelling mistakes in the user's query silently.\n"
                     f"If the Knowledge Base does not contain the answer, return EXACTLY:\n"
                     f"\"{fallback}\"\n"
-                    f"Never guess.\n"
-                    f"Never use outside knowledge.\n\n"
+                    f"Never guess. Never use outside knowledge.\n\n"
                     f"Example\n\n"
                     f"Knowledge Base\n\n"
                     f"--------------------------------\n"

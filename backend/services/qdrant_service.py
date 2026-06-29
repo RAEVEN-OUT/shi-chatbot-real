@@ -115,7 +115,9 @@ class QdrantService:
         query_vector: list[float],
         category_ids: list[str] = None,
         domain_id: str = None,
-        limit: int = 5
+        limit: int = 5,
+        skip_faq: bool = False,
+        skip_docs: bool = False
     ) -> list[KnowledgeSource]:
         """
         Search with tenant isolation + category scoping.
@@ -126,23 +128,30 @@ class QdrantService:
         Results from both pools are merged and re-ranked by score.
         """
         # ── FAQ chunk search ─────────────────────────────────────────────────
-        faq_must = [FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
-
-        if category_ids:
-            faq_must.append(
-                FieldCondition(key="category_id", match=MatchAny(any=list(category_ids)))
-            )
-        elif domain_id and domain_id.strip():
-            faq_must.append(
-                FieldCondition(key="domain_id", match=MatchValue(value=domain_id))
-            )
-        # else: tenant-wide fallback
-
         async def _search_faq():
+            if skip_faq:
+                return []
+                
+            faq_must = [FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+
+            if category_ids:
+                faq_must.append(
+                    FieldCondition(key="category_id", match=MatchAny(any=list(category_ids)))
+                )
+            elif domain_id and domain_id.strip():
+                faq_must.append(
+                    FieldCondition(key="domain_id", match=MatchValue(value=domain_id))
+                )
+            
+            faq_filter = Filter(
+                must=faq_must,
+                must_not=[FieldCondition(key="source_type", match=MatchValue(value="document"))]
+            )
+
             results = await self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
-                query_filter=Filter(must=faq_must),
+                query_filter=faq_filter,
                 limit=limit,
                 search_params=SearchParams(hnsw_ef=128)
             )
@@ -167,7 +176,7 @@ class QdrantService:
 
         # ── Document chunk search (runs in parallel when domain_id available) ─
         async def _search_documents():
-            if not (domain_id and domain_id.strip()):
+            if skip_docs or not (domain_id and domain_id.strip()):
                 return []
             doc_filter = Filter(
                 must=[

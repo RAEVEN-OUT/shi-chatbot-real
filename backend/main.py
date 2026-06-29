@@ -1,11 +1,46 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
+from contextlib import asynccontextmanager
+import logging
+
+logger = logging.getLogger("startup")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── Startup Hardening: Clean up stranded background jobs ──
+    try:
+        from database.database import AsyncSessionLocal
+        from database.models import DocumentSource
+        from sqlalchemy import update
+        
+        async with AsyncSessionLocal() as db:
+            # If the server crashed during an upload, mark stranded docs as failed
+            stmt = (
+                update(DocumentSource)
+                .where(DocumentSource.status.in_(["queued", "processing", "embedding", "indexing"]))
+                .values(
+                    status="failed",
+                    error_stage="System crash",
+                    error_message="Server restarted during processing. Please try again."
+                )
+            )
+            result = await db.execute(stmt)
+            await db.commit()
+            if result.rowcount > 0:
+                logger.warning(f"Hardening: Cleaned up {result.rowcount} stranded documents.")
+    except Exception as e:
+        logger.error(f"Startup hardening failed: {e}")
+        
+    yield
+    # ── Shutdown ──
+    pass
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description="SHI Chatbot Real API powered by FastAPI, PostgreSQL, Qdrant, and Ollama",
+    lifespan=lifespan
 )
 
 app.add_middleware(

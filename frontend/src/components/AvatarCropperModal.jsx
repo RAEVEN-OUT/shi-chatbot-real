@@ -51,6 +51,7 @@ export default function AvatarCropperModal({ isOpen, onClose, imageSrc, onCropCo
             aspect={1}
             cropShape="round"
             showGrid={false}
+            style={{ cropAreaStyle: { borderRadius: '50%' } }}
             onCropChange={setCrop}
             onCropComplete={onCropCompleteHandler}
             onZoomChange={setZoom}

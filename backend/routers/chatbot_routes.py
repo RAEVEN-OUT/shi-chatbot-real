@@ -3,14 +3,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from pydantic import BaseModel
 from database.database import get_db, AsyncSessionLocal
-from database.models import Domain, FailedQuestion, DomainCategory, FAQQuestion, FAQCategory
-from schemas.chatbot import ChatRequest, ChatResponse, DocumentReference
+from database.models import Domain, FailedQuestion, DomainCategory, FAQQuestion, FAQCategory, FAQ, DocumentSource
 from schemas.retrieval import KnowledgeSource
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
 from services.redis_service import redis_service
 from utils.nlp_utils import normalize_query
 from utils.intent_utils import detect_intent
+from utils.llm_logger import log_failed_question
 import hashlib
 import logging
 import asyncio
@@ -41,18 +41,6 @@ class ChatRequest(BaseModel):
     domain_id: str
     message: str
     session_id: str = None
-
-
-async def log_failed_question(domain_id: str, question: str, ai_response: str, reason: str):
-    async with AsyncSessionLocal() as session:
-        fq = FailedQuestion(
-            domain_id=domain_id,
-            question=question,
-            ai_response=ai_response,
-            failure_reason=reason
-        )
-        session.add(fq)
-        await session.commit()
 
 
 async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: int = 5) -> list[KnowledgeSource]:
@@ -223,6 +211,25 @@ async def ask_chatbot(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Embedding error: {e}")
 
+    async def get_capabilities():
+        caps = await redis_service.get_domain_capabilities(request.domain_id)
+        if caps is not None:
+            return caps
+        async with AsyncSessionLocal() as s:
+            from sqlalchemy import func
+            faq_count = await s.scalar(select(func.count(FAQ.id)).where(FAQ.domain_id == request.domain_id))
+            doc_count = await s.scalar(select(func.count(DocumentSource.id)).where(DocumentSource.domain_id == request.domain_id))
+            caps = {
+                "has_faqs": (faq_count or 0) > 0,
+                "has_docs": (doc_count or 0) > 0
+            }
+        background_tasks.add_task(redis_service.set_domain_capabilities, request.domain_id, caps)
+        return caps
+
+    caps = await get_capabilities()
+    has_faqs = caps.get("has_faqs", True)
+    has_docs = caps.get("has_docs", True)
+
     # 4. Parallel Qdrant + FTS
     async def run_qdrant():
         try:
@@ -231,15 +238,26 @@ async def ask_chatbot(
                 query_vector=query_vector,
                 category_ids=category_ids,
                 domain_id=request.domain_id,
-                limit=3
+                limit=3,
+                skip_faq=not has_faqs,
+                skip_docs=not has_docs
             )
         except Exception as e:
             logger.error(f"Qdrant error: {e}")
             return []
+            
+    async def run_fts():
+        if not has_faqs:
+            return []
+        try:
+            return await search_faqs_fts(db, request.domain_id, resolved_query, limit=3)
+        except Exception as e:
+            logger.error(f"FTS error: {e}")
+            return []
 
     qdrant_chunks, fts_chunks = await asyncio.gather(
         run_qdrant(),
-        search_faqs_fts(db, request.domain_id, resolved_query, limit=3)
+        run_fts()
     )
 
     # Merge and deduplicate — FTS first

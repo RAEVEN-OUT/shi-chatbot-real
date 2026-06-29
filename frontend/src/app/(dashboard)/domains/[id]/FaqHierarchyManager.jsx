@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import { 
   ChevronRight, ChevronDown, Globe, Tag, MessageCircle, Search, 
   Plus, Trash2, Save, CheckCircle2, X, RefreshCw, Edit3, Link, AlertTriangle, ShieldAlert, Zap,
-  Maximize, Minimize, CheckSquare, Square, BrainCircuit, Activity, Network, UploadCloud, Download, Code
+  Maximize, Minimize, CheckSquare, Square, BrainCircuit, Activity, Network, UploadCloud, Download, Code, Folder, FileText
 } from 'lucide-react';
 
 import { useAuth } from '@/contexts/AuthContext';
@@ -61,7 +61,7 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
   const [domains, setDomains] = useState([]);
   const [categories, setCategories] = useState([]);
   const [domainCategoryMap, setDomainCategoryMap] = useState({});  // domain_id -> [category_ids]
-  
+  const [documents, setDocuments] = useState([]);
   // Tree state
   const [expandedNodes, setExpandedNodes] = useState({}); 
   const [selectedNode, setSelectedNode] = useState(null); 
@@ -106,10 +106,11 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
   const loadInitialData = async () => {
     try {
       setLoadingInitial(true);
-      const [domRes, catRes, qRes] = await Promise.all([
+      const [domRes, catRes, qRes, docRes] = await Promise.all([
         api.get('/domains'),
         api.get('/faq-categories'),
-        api.get('/faq-questions')
+        api.get('/faq-questions'),
+        api.get('/documents')
       ]);
       const domsData = scopedDomainId ? domRes.data.filter(d => d.id === scopedDomainId) : domRes.data;
       setDomains(domsData);
@@ -128,6 +129,7 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
       }));
       
       setCategories(categoriesWithQuestions);
+      setDocuments(docRes.data || []);
     } catch (e) {
       const errData = e.response?.data; const errorMsg = errData?.message || errData?.detail?.message || errData?.detail || 'Failed to load initial hierarchy data'; showToast(typeof errorMsg === 'string' ? errorMsg : 'Failed to load initial hierarchy data', 'error');} finally {
       setLoadingInitial(false);
@@ -139,7 +141,7 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
     setActiveDomainFilter(domainFilterInput.trim().toLowerCase());
   };
 
-  const toggleNode = async (nodePath, type, id) => {
+  const toggleNode = async (nodePath, type, id, data) => {
     const isExpanded = !!expandedNodes[nodePath];
     if (isExpanded) {
       setExpandedNodes(prev => ({ ...prev, [nodePath]: false }));
@@ -282,14 +284,6 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2 md:gap-3 w-full xl:w-auto">
-          <button onClick={() => openModal('bulk_upload')} className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-gray-900 rounded-xl font-medium transition-all shadow-lg shadow-teal-500/20 text-sm">
-            <UploadCloud className="h-4 w-4" /> Bulk Upload
-          </button>
-          <button onClick={handleBulkDownloadFAQs} disabled={isBulkDownloading} className="flex items-center gap-2 px-4 py-2 bg-gray-50 hover:bg-gray-100 text-gray-900 rounded-xl font-medium transition-all shadow-sm text-sm border border-gray-200 disabled:opacity-50">
-            {isBulkDownloading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />} {isBulkDownloading ? 'Preparing...' : 'Bulk Download'}
-          </button>
-
-          <div className="w-px h-8 bg-gray-50 mx-1"></div>
           <button onClick={toggleFullscreen} className="flex items-center gap-2 px-3 py-2 bg-gray-50 hover:bg-gray-100 text-gray-700 rounded-xl transition-colors border border-gray-200" title={isFullscreen ? "Exit Fullscreen" : "Fullscreen Mode"}>
             {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
             <span className="text-sm font-medium hidden sm:inline">{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
@@ -338,7 +332,7 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
                 {domains
                   .filter(d => !activeDomainFilter || (d.domain_url && d.domain_url.toLowerCase().includes(activeDomainFilter)))
                   .map(domain => (
-                  <TreeNode key={domain.id} type="domain" data={domain} nodePath={`d_${domain.id}`} depth={0} expandedNodes={expandedNodes} toggleNode={toggleNode} selectNode={selectNode} selectedNode={selectedNode} loadingNode={loadingNode} domainCategoryMap={domainCategoryMap} categories={categories} scopedDomainId={scopedDomainId} />
+                  <TreeNode key={domain.id} type="domain" data={domain} nodePath={`d_${domain.id}`} depth={0} expandedNodes={expandedNodes} toggleNode={toggleNode} selectNode={selectNode} selectedNode={selectedNode} loadingNode={loadingNode} domainCategoryMap={domainCategoryMap} categories={categories} documents={documents} scopedDomainId={scopedDomainId} />
                 ))}
               </div>
             }
@@ -369,7 +363,7 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
               </div>
             )}
             {selectedNode ? (
-              <DetailsPanel deletingId={deletingId} selectedNode={selectedNode} customTimeStamp={customTimeStamp} domains={domains} setDomains={setDomains} categories={categories} setCategories={setCategories} domainCategoryMap={domainCategoryMap} setDomainCategoryMap={setDomainCategoryMap} openModal={openModal} selectNode={selectNode} handleDeleteNode={handleDeleteNode} scopedDomainId={scopedDomainId} />
+              <DetailsPanel deletingId={deletingId} selectedNode={selectedNode} customTimeStamp={customTimeStamp} domains={domains} setDomains={setDomains} categories={categories} setCategories={setCategories} domainCategoryMap={domainCategoryMap} setDomainCategoryMap={setDomainCategoryMap} documents={documents} setDocuments={setDocuments} openModal={openModal} selectNode={selectNode} handleDeleteNode={handleDeleteNode} scopedDomainId={scopedDomainId} />
             ) : (
               <div className="flex-1 flex items-center justify-center text-gray-500 flex-col gap-4   ">
                 <div className="w-20 h-20 rounded-full border border-gray-200 flex items-center justify-center bg-white">
@@ -391,7 +385,9 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
       {modalState.isOpen && modalState.type === 'assign_category' && <AssignExistingModal isOpen={true} onClose={closeModal} parentId={modalState.parentId} type="category" allItems={categories} assignedIds={domainCategoryMap[modalState.parentId] || []} onSave={async (ids) => { try { await api.put(`/domains/${modalState.parentId}/categories`, { category_ids: ids }); setDomainCategoryMap(prev => ({...prev, [modalState.parentId]: ids})); showToast('Category assignments updated', 'success'); closeModal(); } catch (err) { showToast(`Error: ${err.response?.data?.detail || err.message}`, 'error'); throw err; } }} />}
       
       {modalState.isOpen && modalState.type === 'create_question' && <CreateQuestionModal isOpen={true} onClose={closeModal} parentId={modalState.parentId} categories={categories} setCategories={setCategories} selectNode={selectNode} />}
-      {modalState.isOpen && modalState.type === 'bulk_upload' && <BulkUploadModal isOpen={true} onClose={closeModal} loadInitialData={loadInitialData} />}
+      {modalState.isOpen && modalState.type === 'bulk_upload_faq' && <BulkUploadModal isOpen={true} onClose={closeModal} loadInitialData={loadInitialData} domain={modalState.data} uploadType="faq" />}
+      {modalState.isOpen && modalState.type === 'bulk_upload_doc' && <BulkUploadModal isOpen={true} onClose={closeModal} loadInitialData={loadInitialData} domain={modalState.data} uploadType="doc" />}
+      {modalState.isOpen && modalState.type === 'bulk_download' && <BulkDownloadModal isOpen={true} onClose={closeModal} domains={domains} categories={categories} domainCategoryMap={domainCategoryMap} initialDomain={modalState.data} />}
       
 
     </div>
@@ -406,7 +402,7 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
 // ---------------------------------------------------------------------------
 // TREE NODE COMPONENT (Visual Hierarchy + Counts)
 // ---------------------------------------------------------------------------
-function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNode, selectNode, selectedNode, loadingNode, domainCategoryMap, categories, scopedDomainId }) {
+function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNode, selectNode, selectedNode, loadingNode, domainCategoryMap, categories, documents, scopedDomainId }) {
   const isExpanded = !!expandedNodes[nodePath];
   const isSelected = selectedNode?.id === data.id;
   const isLoading = !!loadingNode[nodePath];
@@ -415,8 +411,21 @@ function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNode, sele
   let count = 0;
   
   if (type === 'domain') { 
-    childType = 'category'; 
-    children = categories.filter(c => (domainCategoryMap[data.id] || []).map(String).includes(String(c.id)));
+    childType = 'folder'; 
+    children = [
+      { id: `cat_folder_${data.id}`, isFolder: true, folderType: 'category', name: 'Categories', domain_id: data.id, domain: data },
+      { id: `doc_folder_${data.id}`, isFolder: true, folderType: 'document', name: 'Documents', domain_id: data.id, domain: data }
+    ];
+    count = 2;
+  }
+  else if (type === 'folder' && data.folderType === 'category') {
+    childType = 'category';
+    children = categories.filter(c => (domainCategoryMap[data.domain_id] || []).map(String).includes(String(c.id)));
+    count = children.length;
+  }
+  else if (type === 'folder' && data.folderType === 'document') {
+    childType = 'document';
+    children = documents ? documents.filter(d => d.domain_id === data.domain_id) : [];
     count = children.length;
   }
   else if (type === 'category') { 
@@ -425,23 +434,25 @@ function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNode, sele
     count = children.length;
   }
 
-  const childTypeDisplay = childType === 'category' ? (count === 1 ? 'category' : 'categories') : (count === 1 ? 'question' : 'questions');
-  const emptyChildTypeDisplay = childType === 'category' ? 'categories' : 'questions';
+  let childTypeDisplay = '';
+  if (childType === 'folder') childTypeDisplay = 'folders';
+  else if (childType === 'category') childTypeDisplay = count === 1 ? 'category' : 'categories';
+  else if (childType === 'document') childTypeDisplay = count === 1 ? 'document' : 'documents';
+  else childTypeDisplay = count === 1 ? 'question' : 'questions';
 
-  const hasChildren = type !== 'question';
+  const hasChildren = type !== 'question' && type !== 'document';
   const getIcon = () => {
     if(type === 'domain') {
-      if (scopedDomainId) return null; // Remove icon in scoped mode
+      if (scopedDomainId) return null;
       return <Globe className="h-4 w-4 text-blue-400 shrink-0" />;
     }
+    if(type === 'folder') return <Folder className="h-4 w-4 text-gray-400 shrink-0" />;
     if(type === 'category') return <Tag className="h-4 w-4 text-purple-400 shrink-0" />;
+    if(type === 'document') return <FileText className="h-4 w-4 text-emerald-400 shrink-0" />;
     return <MessageCircle className="h-4 w-4 text-amber-400 shrink-0" />;
   };
   
-  let title = type === 'domain' ? (data.domain_url || data.name) : type === 'category' ? data.faq_title : data.question;
-  if (type === 'domain' && scopedDomainId) {
-    title = count > 0 ? 'Categories' : 'Add Category';
-  }
+  let title = type === 'domain' ? (data.domain_url || data.name) : type === 'folder' ? data.name : type === 'category' ? data.faq_title : type === 'document' ? data.source_title : data.question;
 
   return (
     <div className="w-full relative group">
@@ -453,40 +464,21 @@ function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNode, sele
         <div className={`w-5 h-5 flex items-center justify-center mr-1 shrink-0 ${hasChildren ? 'cursor-pointer hover:bg-gray-100 rounded' : ''}`} onClick={(e) => { e.stopPropagation(); if (hasChildren) { toggleNode(nodePath, type, data.id); selectNode(type, data.id, data); } }}>
           {isLoading ? <RefreshCw className="h-3 w-3 animate-spin text-gray-500" /> : hasChildren ? (isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-gray-500" /> : <ChevronRight className="h-3.5 w-3.5 text-gray-500" />) : <span className="w-3.5 h-3.5" />}
         </div>
-        <div className="flex flex-1 items-center gap-2 truncate" onClick={() => {selectNode(type, data.id, data); if (hasChildren && !isExpanded) toggleNode(nodePath, type, data.id); if(window.innerWidth < 1280) setIsTreeDrawerOpen(false);}}>  
+        <div className="flex flex-1 items-center gap-2 truncate" onClick={() => {selectNode(type, data.id, data); if (hasChildren && !isExpanded) toggleNode(nodePath, type, data.id);}}>  
           {getIcon()}
           <span title={title} className={`truncate text-sm ${isSelected ? 'text-blue-700 font-bold' : 'text-gray-700'}`}>{title}</span>
           {hasChildren && <span className="text-[10px] text-gray-500 ml-auto mr-1 bg-gray-50 px-1.5 py-0.5 rounded shrink-0">{count} {childTypeDisplay}</span>}
-          {hasChildren && (
-            <button 
-              onClick={(e) => { 
-                e.stopPropagation(); 
-                selectNode(type, data.id, data, 'create'); 
-                if (!isExpanded) toggleNode(nodePath, type, data.id); 
-              }}
-              className="flex items-center justify-center w-5 h-5 rounded hover:bg-blue-100 text-blue-500 ml-1 transition-colors"
-              title={`Create ${childType === 'category' ? 'Category' : 'Question'}`}
-            >
-              <Plus size={14} />
-            </button>
-          )}
         </div>
       </div>
       
       {isExpanded && hasChildren && (
         <div className="relative mt-1">
           <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-100/50 -z-10"></div>
-          
           <div className="pl-6 space-y-0.5 pb-1">
-            {children.length === 0 && !isLoading && (
-              <div className="text-xs text-gray-500 py-1 pl-4 italic relative">
-                <div className="absolute left-[-8px] top-[10px] w-3 h-px bg-gray-100/50 -z-10"></div>
-                No {emptyChildTypeDisplay} assigned
-              </div>
-            )}            {children.map(child => (
+            {children.map(child => (
               <div key={child.id} className="relative">
                 <div className="absolute left-[-8px] top-[14px] w-3 h-px bg-gray-100/50 -z-10"></div>
-                <TreeNode type={childType} data={child} nodePath={`${nodePath}-${childType.charAt(0)}_${child.id}`} depth={depth + 1} expandedNodes={expandedNodes} toggleNode={toggleNode} selectNode={selectNode} selectedNode={selectedNode} loadingNode={loadingNode} domainCategoryMap={domainCategoryMap} categories={categories} scopedDomainId={scopedDomainId} />
+                <TreeNode type={childType === 'folder' ? 'folder' : childType} data={child} nodePath={`${nodePath}-${childType.charAt(0)}_${child.id}`} depth={depth + 1} expandedNodes={expandedNodes} toggleNode={toggleNode} selectNode={selectNode} selectedNode={selectedNode} loadingNode={loadingNode} domainCategoryMap={domainCategoryMap} categories={categories} documents={documents} scopedDomainId={scopedDomainId} />
               </div>
             ))}
           </div>
@@ -499,22 +491,26 @@ function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNode, sele
 // ---------------------------------------------------------------------------
 // DETAILS PANEL COMPONENTS (TABBED)
 // ---------------------------------------------------------------------------
-function DetailsPanel({ deletingId, selectedNode, customTimeStamp, domains, setDomains, categories, setCategories, domainCategoryMap, setDomainCategoryMap, openModal, selectNode, handleDeleteNode, scopedDomainId }) {
-  const { type, data } = selectedNode;
+function DetailsPanel({ deletingId, selectedNode, customTimeStamp, domains, setDomains, categories, setCategories, domainCategoryMap, setDomainCategoryMap, documents, setDocuments, openModal, selectNode, handleDeleteNode, scopedDomainId }) {
+  const { type, data } = selectedNode;  
   let freshData = data;
   if(type === 'domain') freshData = domains.find(d => d.id === data.id) || data;
+  if(type === 'folder') freshData = domains.find(d => d.id === data.domain_id) || data.domain;
   if(type === 'category') freshData = categories.find(c => c.id === data.id) || data;
   if(type === 'question') {
     const parentCat = categories.find(c => c.questions?.some(q => q.id === data.id));
     if(parentCat) freshData = parentCat.questions.find(q => q.id === data.id) || data;
   }
-  if (type === 'domain') return <DomainManager deletingId={deletingId} domain={freshData} domains={domains} setDomains={setDomains} categories={categories} setCategories={setCategories} domainCategoryMap={domainCategoryMap} setDomainCategoryMap={setDomainCategoryMap} openModal={openModal} selectNode={selectNode} handleDeleteNode={handleDeleteNode} initialTab={selectedNode.initialTab} scopedDomainId={scopedDomainId} />;
+  
+  if (type === 'domain') return <DomainManager deletingId={deletingId} domain={freshData} domains={domains} setDomains={setDomains} categories={categories} setCategories={setCategories} domainCategoryMap={domainCategoryMap} setDomainCategoryMap={setDomainCategoryMap} documents={documents} setDocuments={setDocuments} openModal={openModal} selectNode={selectNode} handleDeleteNode={handleDeleteNode} initialTab={selectedNode?.initialTab} scopedDomainId={scopedDomainId} />;
+  if (type === 'folder') return <DomainManager deletingId={deletingId} domain={freshData} domains={domains} setDomains={setDomains} categories={categories} setCategories={setCategories} domainCategoryMap={domainCategoryMap} setDomainCategoryMap={setDomainCategoryMap} documents={documents} setDocuments={setDocuments} openModal={openModal} selectNode={selectNode} handleDeleteNode={handleDeleteNode} initialTab={data.folderType === 'document' ? 'documents' : 'assignments'} scopedDomainId={scopedDomainId} />;
   if (type === 'category') return <CategoryManager deletingId={deletingId} category={freshData} categories={categories} setCategories={setCategories} openModal={openModal} selectNode={selectNode} handleDeleteNode={handleDeleteNode} initialTab={selectedNode.initialTab} />;
   if (type === 'question') return <QuestionManager deletingId={deletingId} question={freshData} customTimeStamp={customTimeStamp} categories={categories} setCategories={setCategories} selectNode={selectNode} handleDeleteNode={handleDeleteNode} />;
+  if (type === 'document') return <DocumentManager deletingId={deletingId} document={freshData} documents={documents} setDocuments={setDocuments} selectNode={selectNode} handleDeleteNode={handleDeleteNode} />;
   return null;
 }
 
-function DomainManager({ deletingId, domain, domains, setDomains, categories, setCategories, domainCategoryMap, setDomainCategoryMap, openModal, selectNode, handleDeleteNode, initialTab, scopedDomainId }) {
+function DomainManager({ deletingId, domain, domains, setDomains, categories, setCategories, domainCategoryMap, setDomainCategoryMap, documents, setDocuments, openModal, selectNode, handleDeleteNode, initialTab, scopedDomainId }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'assignments');
   const assignedCatIds = domainCategoryMap[domain.id] || [];
   const validAssignedCategories = categories.filter(c => assignedCatIds.map(String).includes(String(c.id)));
@@ -536,34 +532,17 @@ function DomainManager({ deletingId, domain, domains, setDomains, categories, se
     if (initialTab) setActiveTab(initialTab);
   }, [initialTab, domain.id]);
 
+  const domainDocuments = documents.filter(doc => doc.domain_id === domain.id);
+
   const tabs = [
     { id: 'assignments', label: `Categories (${validAssignedCategories.length})`, icon: Tag },
+    { id: 'documents', label: `Documents (${domainDocuments.length})`, icon: MessageCircle },
     { id: 'create', label: 'Create Category', icon: Plus },
     ...(scopedDomainId ? [] : [
       { id: 'edit', label: 'Settings & Widget Style', icon: Edit3 },
       { id: 'embed', label: 'Embed Code', icon: Code },
     ])
   ];
-
-  const handleDownloadFAQs = () => {
-    setIsDownloading(true);
-    setTimeout(() => {
-      try {
-        const exportData = [];
-        if (validAssignedCategories.length === 0) { showToast('No FAQs found for this domain', 'info'); return; }
-        validAssignedCategories.forEach(category => {
-          const catQuestions = category.questions || [];
-          if (catQuestions.length === 0) exportData.push({ Domain: domain.domain_url, Category: category.faq_title, Question: '', Answer: '' });
-          catQuestions.forEach(q => exportData.push({ Domain: domain.domain_url, Category: category.faq_title, Question: q.question, Answer: q.answer }));
-        });
-        if (exportData.length === 0) { showToast('No data to export', 'info'); return; }
-        const ws = XLSX.utils.json_to_sheet(exportData);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "FAQs");
-        XLSX.writeFile(wb, `${domain.domain_url.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_FAQs.xlsx`);
-      } finally { setIsDownloading(false); }
-    }, 50);
-  };
 
   const removeCategory = async (catId) => {
     const confirm = await confirmAction({ title: 'Remove Category', text: 'Remove this category from the domain?', confirmButtonText: 'Yes, Remove' });
@@ -647,8 +626,7 @@ function DomainManager({ deletingId, domain, domains, setDomains, categories, se
         </div>
         <div className="flex flex-wrap gap-2 w-full xl:w-auto">
           <button onClick={() => setActiveTab('create')} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm font-medium flex items-center gap-1 shadow-sm transition-colors"><Plus size={16}/> Create Category</button>
-          <button onClick={() => openModal('assign_category', domain.id)} className="px-3 py-2 bg-gray-50 hover:bg-gray-100 text-gray-900 rounded text-sm font-medium flex items-center gap-1 shadow-sm transition-colors"><Link size={14}/> Assign Category</button>
-          <button onClick={handleDownloadFAQs} disabled={isDownloading} className="px-3 py-2 bg-gray-50 hover:bg-gray-100 text-gray-900 rounded text-sm font-medium flex items-center gap-1 shadow-sm transition-colors disabled:opacity-50">{isDownloading ? <RefreshCw size={14} className="animate-spin" /> : <Download size={14}/>} {isDownloading ? 'Preparing...' : 'Download FAQs'}</button>
+          <button onClick={() => openModal('bulk_download', null, domain)} className="px-3 py-2 bg-gray-50 hover:bg-gray-100 text-gray-900 rounded text-sm font-medium flex items-center gap-1 shadow-sm transition-colors"><Download size={14}/> Bulk Download</button>
           <div className="w-px h-8 bg-gray-50 mx-1 mt-1"></div>
           <button onClick={() => handleDeleteNode('domain', domain.id)} disabled={deletingId === domain.id} className="p-2 mt-1 bg-gray-50 hover:bg-red-500/20 rounded text-gray-700 hover:text-gray-500 transition-colors disabled:opacity-50">{deletingId === domain.id ? <RefreshCw className="animate-spin h-4 w-4" /> : <Trash2 size={16}/>}</button>
         </div>
@@ -659,11 +637,16 @@ function DomainManager({ deletingId, domain, domains, setDomains, categories, se
           <div className="max-w-4xl space-y-4 m-6">
             <div className="flex justify-between items-center mb-2">
               <p className="text-sm text-gray-500">FAQ Categories serving this Domain</p>
-              {selectedCats.size > 0 && (
-                <button onClick={handleBulkRemoveCategories} disabled={isBulkRemoving} className="px-3 py-1.5 bg-red-100 text-red-600 rounded text-xs font-bold flex items-center gap-1 transition-colors hover:bg-red-200">
-                  {isBulkRemoving ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />} Remove Selected ({selectedCats.size})
+              <div className="flex items-center gap-2">
+                <button onClick={() => openModal('bulk_upload_faq', null, domain)} className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-600 text-xs font-bold rounded flex items-center gap-1 transition-colors">
+                  <UploadCloud size={14}/> Bulk Upload FAQs
                 </button>
-              )}
+                {selectedCats.size > 0 && (
+                  <button onClick={handleBulkRemoveCategories} disabled={isBulkRemoving} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold rounded flex items-center gap-1 transition-colors disabled:opacity-50">
+                    {isBulkRemoving ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />} Remove Selected
+                  </button>
+                )}
+              </div>
             </div>
             {validAssignedCategories.length === 0 ? <div className="text-center py-10 bg-white border border-gray-200 rounded-xl"><p className="text-gray-500 text-sm">No categories assigned</p></div> :
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -695,6 +678,56 @@ function DomainManager({ deletingId, domain, domains, setDomains, categories, se
             }
           </div>
         )}
+        {activeTab === 'documents' && (
+          <div className="p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold text-gray-900">Knowledge Base Documents</h3>
+              <button onClick={() => openModal('bulk_upload_doc', null, domain)} className="px-4 py-2 bg-teal-600 hover:bg-teal-500 text-gray-900 font-bold text-sm rounded-xl flex items-center gap-2 shadow-sm">
+                <UploadCloud size={16} /> Upload Document
+              </button>
+            </div>
+            {domainDocuments.length === 0 ? (
+              <div className="text-center py-12 bg-white rounded-xl border border-gray-200">
+                <div className="mx-auto w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mb-3">
+                  <MessageCircle className="h-6 w-6 text-gray-400" />
+                </div>
+                <h3 className="text-sm font-bold text-gray-900 mb-1">No documents yet</h3>
+                <p className="text-sm text-gray-500 mb-4">Upload long texts, PDFs, or Word docs to use in RAG.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                {domainDocuments.map(doc => (
+                  <div key={doc.id} className="bg-white border border-gray-200 rounded-xl p-4 hover:border-teal-500 transition-colors group relative shadow-sm">
+                    <div className="flex justify-between items-start mb-2 gap-2">
+                      <div className="flex items-center gap-2 text-sm font-bold text-gray-900 min-w-0 flex-1"><MessageCircle className="h-4 w-4 text-teal-500 shrink-0" /> <span title={doc.source_title} className="truncate">{doc.source_title}</span></div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button onClick={async (e) => {
+                          e.stopPropagation();
+                          const conf = await confirmAction({ title: 'Delete Document', text: 'Delete this document and all its chunks? This cannot be undone.', confirmButtonText: 'Yes, Delete' });
+                          if (!conf) return;
+                          try {
+                            await api.delete(`/documents/${doc.id}`);
+                            setDocuments(prev => prev.filter(d => d.id !== doc.id));
+                            showToast('Document deleted', 'success');
+                          } catch (err) { showToast('Error deleting document', 'error'); }
+                        }} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors" title="Delete Document">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                    {doc.error_message && (
+                      <div className="text-xs text-red-500 mb-2 truncate" title={doc.error_message}>{doc.error_message}</div>
+                    )}
+                    <div className="flex justify-between items-center mt-3 pt-3 border-t border-gray-200">
+                      <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded ${doc.status === 'ready' ? 'bg-emerald-100 text-emerald-400' : doc.status === 'failed' ? 'bg-red-100 text-red-400' : 'bg-amber-100 text-amber-500'}`}>{doc.status}</span>
+                      <span className="text-[10px] text-gray-500 font-bold bg-gray-50 px-2 py-1 rounded">{doc.chunk_count} Chunks</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {activeTab === 'create' && (
           <div className="max-w-4xl m-6 bg-white border border-gray-200 rounded-xl p-6">
             <h3 className="text-lg font-bold text-gray-900 mb-4">Create New Category</h3>
@@ -715,6 +748,226 @@ function DomainManager({ deletingId, domain, domains, setDomains, categories, se
   );
 }
 
+
+
+function DocumentManager({ deletingId, document: docNode, documents, setDocuments, selectNode, handleDeleteNode }) {
+  const { showToast } = useToast();
+  const [editing, setEditing] = useState(false);
+  const [editFormData, setEditFormData] = useState({ source_title: docNode?.source_title || '' });
+  const [fileToUpload, setFileToUpload] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    setEditFormData({ source_title: docNode?.source_title || '' });
+    setFileToUpload(null);
+  }, [docNode]);
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    setEditing(true);
+    try {
+      const res = await api.put(`/documents/${docNode.id}`, editFormData);
+      const updatedDoc = res.data;
+      setDocuments(prev => prev.map(d => d.id === docNode.id ? updatedDoc : d));
+      showToast('Document updated', 'success');
+      selectNode('document', docNode.id, updatedDoc);
+    } catch (e) {
+      showToast('Error updating document', 'error');
+    } finally {
+      setEditing(false);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      setFileToUpload(e.target.files[0]);
+    }
+  };
+
+  const handleFileDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setFileToUpload(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleReplaceFile = async () => {
+    if (!fileToUpload) return;
+    setIsUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', fileToUpload);
+      
+      const res = await api.put(`/documents/${docNode.id}/file`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      
+      const updatedDoc = { 
+        ...docNode, 
+        status: 'processing', 
+        filename: fileToUpload.name,
+        file_size: fileToUpload.size
+      };
+      setDocuments(prev => prev.map(d => d.id === docNode.id ? updatedDoc : d));
+      setFileToUpload(null);
+      showToast('Document replacement started', 'success');
+      selectNode('document', docNode.id, updatedDoc);
+    } catch (e) {
+      const msg = e.response?.data?.detail || 'Error replacing document';
+      showToast(msg, 'error');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  if (!docNode) return null;
+
+  return (
+    <div className="flex-1 flex flex-col h-full bg-white relative">
+      <div className="flex-none p-6 pb-4 border-b border-gray-200">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 bg-indigo-50 rounded-xl flex items-center justify-center border border-indigo-100">
+              <MessageCircle className="h-5 w-5 text-indigo-600" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-gray-900">{docNode.source_title}</h2>
+              <p className="text-sm text-gray-500">Manage Document</p>
+            </div>
+          </div>
+          <button 
+            onClick={() => handleDeleteNode('document', docNode.id, docNode.source_title)}
+            disabled={deletingId === docNode.id}
+            className="px-3 py-2 text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-colors flex items-center gap-2"
+          >
+            <Trash2 className="h-4 w-4" />
+            {deletingId === docNode.id ? 'Deleting...' : 'Delete'}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6 bg-gray-50">
+        <div className="max-w-2xl mx-auto space-y-6">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div className="p-4 border-b border-gray-200 bg-gray-50/50">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <Edit3 className="h-4 w-4 text-indigo-500" />
+                Document Details
+              </h3>
+            </div>
+            <div className="p-5">
+              <form onSubmit={handleEditSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                  <input
+                    type="text"
+                    value={editFormData.source_title}
+                    onChange={(e) => setEditFormData({...editFormData, source_title: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-shadow"
+                    required
+                  />
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Filename</label>
+                    <p className="text-sm text-gray-900 truncate">{docNode.filename}</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Status</label>
+                    <div className="flex items-center gap-1.5">
+                      {docNode.status === 'ready' ? <Check className="h-4 w-4 text-emerald-500" /> : docNode.status === 'processing' || docNode.status === 'queued' ? <div className="h-3 w-3 border-2 border-amber-500 border-t-transparent rounded-full animate-spin"></div> : <X className="h-4 w-4 text-red-500" />}
+                      <span className={`text-sm font-medium capitalize ${docNode.status === 'ready' ? 'text-emerald-700' : docNode.status === 'processing' || docNode.status === 'queued' ? 'text-amber-600' : 'text-red-600'}`}>{docNode.status}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">File Size</label>
+                    <p className="text-sm text-gray-900">{((docNode.file_size||0) / 1024).toFixed(1)} KB</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Chunks</label>
+                    <p className="text-sm text-gray-900">{docNode.chunk_count||0}</p>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={editing || editFormData.source_title === docNode.source_title}
+                    className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                  >
+                    {editing ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div className="p-4 border-b border-gray-200 bg-gray-50/50">
+              <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                <UploadCloud className="h-4 w-4 text-indigo-500" />
+                Replace File
+              </h3>
+            </div>
+            <div className="p-5">
+              <p className="text-sm text-gray-600 mb-4">
+                Uploading a new file will delete all existing extracted data and re-process the new file.
+              </p>
+              
+              <div 
+                className={`border-2 border-dashed rounded-xl p-8 text-center transition-colors ${fileToUpload ? 'border-indigo-400 bg-indigo-50' : 'border-gray-300 hover:border-indigo-400 hover:bg-gray-50 cursor-pointer'}`}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={handleFileDrop}
+                onClick={() => !fileToUpload && fileInputRef.current?.click()}
+              >
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  className="hidden" 
+                  onChange={handleFileChange}
+                  accept=".pdf,.txt,.docx" 
+                />
+                
+                {fileToUpload ? (
+                  <div className="flex flex-col items-center">
+                    <div className="h-12 w-12 rounded-full bg-indigo-100 flex items-center justify-center mb-3">
+                      <Check className="h-6 w-6 text-indigo-600" />
+                    </div>
+                    <p className="text-sm font-medium text-gray-900">{fileToUpload.name}</p>
+                    <p className="text-xs text-gray-500 mt-1">{(fileToUpload.size / 1024).toFixed(1)} KB</p>
+                    <div className="mt-4 flex gap-3">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setFileToUpload(null); }}
+                        className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); handleReplaceFile(); }}
+                        disabled={isUploading}
+                        className="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        {isUploading ? 'Uploading...' : 'Replace File'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center">
+                    <UploadCloud className="h-10 w-10 text-gray-400 mb-3" />
+                    <p className="text-sm font-medium text-gray-900">Click to upload or drag and drop</p>
+                    <p className="text-xs text-gray-500 mt-1">PDF, TXT, DOCX up to 50MB</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 
 function CategoryManager({ deletingId, category, categories, setCategories, openModal, selectNode, handleDeleteNode, initialTab }) {
@@ -1464,43 +1717,163 @@ function AssignExistingModal({ isOpen, onClose, type, allItems, assignedIds, onS
 }
 
 // ---------------------------------------------------------------------------
+// BULK DOWNLOAD MODAL
+// ---------------------------------------------------------------------------
+function BulkDownloadModal({ isOpen, onClose, domains, categories, domainCategoryMap, initialDomain }) {
+  const { showToast } = useToast();
+  const [selectedDomainId, setSelectedDomainId] = useState(initialDomain ? initialDomain.id : 'all');
+  const [selectedCatIds, setSelectedCatIds] = useState(['all']);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  useEffect(() => {
+    setSelectedCatIds(['all']);
+  }, [selectedDomainId]);
+
+  const availableCategories = React.useMemo(() => {
+    if (selectedDomainId === 'all') return [];
+    const assignedIds = domainCategoryMap[selectedDomainId] || [];
+    return categories.filter(c => assignedIds.map(String).includes(String(c.id)));
+  }, [selectedDomainId, domainCategoryMap, categories]);
+
+  const handleDownload = async () => {
+    const today = new Date().toISOString().split('T')[0];
+    const lastDownload = localStorage.getItem('last_bulk_download_date');
+    if (selectedDomainId === 'all' && lastDownload === today) {
+      showToast('Full bulk download is limited to once per day to conserve resources. Please select a specific domain.', 'error');
+      return;
+    }
+    if (selectedDomainId === 'all') {
+      const confirm = await confirmAction({ title: 'Confirm Full Download', text: 'You are allowed one full download per day. Continue?', confirmButtonText: 'Yes, Download' });
+      if (!confirm) return;
+    }
+
+    setIsDownloading(true);
+    setTimeout(() => {
+      try {
+        const exportData = [];
+        const domainsToExport = selectedDomainId === 'all' ? domains : domains.filter(d => String(d.id) === String(selectedDomainId));
+        
+        domainsToExport.forEach(d => {
+          const catIds = domainCategoryMap[d.id] || [];
+          let dCats = categories.filter(c => catIds.map(String).includes(String(c.id)));
+          
+          if (selectedDomainId !== 'all' && !selectedCatIds.includes('all')) {
+            dCats = dCats.filter(c => selectedCatIds.includes(String(c.id)));
+          }
+
+          if (dCats.length === 0) {
+            exportData.push({ Domain: d.domain_url, Category: '', Question: '', Answer: '' });
+          } else {
+            dCats.forEach(c => {
+              const qList = c.questions || [];
+              if (qList.length === 0) {
+                exportData.push({ Domain: d.domain_url, Category: c.faq_title, Question: '', Answer: '' });
+              } else {
+                qList.forEach(q => {
+                  exportData.push({ Domain: d.domain_url, Category: c.faq_title, Question: q.question, Answer: q.answer });
+                });
+              }
+            });
+          }
+        });
+
+        if (exportData.length === 0) {
+          showToast('No FAQs found for the selected filters', 'info');
+          return;
+        }
+
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "FAQs");
+        const filename = selectedDomainId === 'all' ? 'All_Domains_FAQs.xlsx' : `${domainsToExport[0]?.domain_url}_FAQs.xlsx`;
+        XLSX.writeFile(wb, filename);
+        if (selectedDomainId === 'all') localStorage.setItem('last_bulk_download_date', today);
+        onClose();
+      } catch (err) {
+        showToast('Error downloading FAQs', 'error');
+      } finally { setIsDownloading(false); }
+    }, 50);
+  };
+
+  return (
+    <ModalWrapper isOpen={isOpen} onClose={onClose} title="Download FAQs" icon={Download} iconColor="text-blue-500">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Select Domain</label>
+          <select value={selectedDomainId} onChange={e => setSelectedDomainId(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-blue-500">
+            <option value="all">All Domains</option>
+            {domains.map(d => <option key={d.id} value={d.id}>{d.domain_url}</option>)}
+          </select>
+        </div>
+
+        {selectedDomainId !== 'all' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Select Categories</label>
+            <select multiple size={4} value={selectedCatIds} onChange={e => {
+              const vals = Array.from(e.target.selectedOptions, option => option.value);
+              if (vals.includes('all') && !selectedCatIds.includes('all')) setSelectedCatIds(['all']);
+              else setSelectedCatIds(vals.filter(v => v !== 'all').length === 0 ? ['all'] : vals.filter(v => v !== 'all'));
+            }} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-blue-500 custom-scrollbar">
+              <option value="all">All Categories</option>
+              {availableCategories.map(c => <option key={c.id} value={c.id}>{c.faq_title}</option>)}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">Hold Ctrl (Windows) or Cmd (Mac) to select multiple categories.</p>
+          </div>
+        )}
+
+        <div className="flex justify-end pt-4 gap-3 border-t border-gray-100 mt-6">
+          <button onClick={onClose} className="px-5 py-2 text-sm text-gray-700 hover:text-gray-900">Cancel</button>
+          <button onClick={handleDownload} disabled={isDownloading || (selectedDomainId !== 'all' && selectedCatIds.length === 0)} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-500/20 flex items-center gap-2">
+            {isDownloading ? <RefreshCw className="h-4 w-4 animate-spin"/> : <Download className="h-4 w-4"/>} {isDownloading ? 'Processing...' : 'Download Data'}
+          </button>
+        </div>
+      </div>
+    </ModalWrapper>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // BULK UPLOAD MODAL
 // ---------------------------------------------------------------------------
-function BulkUploadModal({ isOpen, onClose, loadInitialData }) {
+function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uploadType = 'faq' }) {
   const { showToast } = useToast();
+  const [activeTab, setActiveTab] = useState(uploadType); 
+  
+  // FAQ Bulk Upload State
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
 
+  // Document Upload State
+  const [docType, setDocType] = useState('file'); 
+  const [docFile, setDocFile] = useState(null);
+  const [docText, setDocText] = useState('');
+  const [docTitle, setDocTitle] = useState('');
+  const [docLoading, setDocLoading] = useState(false);
+  const [docResults, setDocResults] = useState(null);
+
   const handleFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      setFile(e.target.files[0]);
-    }
+    if (e.target.files && e.target.files.length > 0) setFile(e.target.files[0]);
   };
 
   const handleDownloadSample = () => {
-    const ws = XLSX.utils.json_to_sheet([{ Domain: "example.com", Category: "Refunds", Question: "How do I get a refund?", Answer: "Please contact support." }]);
+    const ws = XLSX.utils.json_to_sheet([{ Category: "Refunds", Question: "How do I get a refund?", Answer: "Please contact support." }]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "FAQ_Template");
-    XLSX.writeFile(wb, "FAQ_Bulk_Upload_Sample.xlsx");
+    XLSX.writeFile(wb, "FAQ_Upload_Sample.xlsx");
   };
 
-  const handleUpload = async () => {
+  const handleUploadFAQ = async () => {
     if (!file) return;
     setLoading(true);
     setResults(null);
     try {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
-      const firstSheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[firstSheetName];
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(worksheet);
 
-      if (json.length === 0) {
-        showToast('File is empty', 'error');
-        setLoading(false);
-        return;
-      }
+      if (json.length === 0) { showToast('File is empty', 'error'); setLoading(false); return; }
 
       const seen = new Set();
       const uniqueRows = [];
@@ -1508,99 +1881,165 @@ function BulkUploadModal({ isOpen, onClose, loadInitialData }) {
         const category = (row.Category || 'General').toString().trim();
         const question = (row.Question || '').toString().trim();
         const answer = (row.Answer || '').toString().trim();
-        
         if (!question || !answer) continue;
-
         const key = `${category}|${question}|${answer}`.toLowerCase();
-        
         if (!seen.has(key)) {
           seen.add(key);
-          uniqueRows.push(row);
+          uniqueRows.push({ Domain: domain.domain_url, Category: category, Question: question, Answer: answer });
         }
       }
 
-      if (uniqueRows.length < json.length) {
-        showToast(`${json.length - uniqueRows.length} duplicate or invalid rows skipped.`, 'warning');
-      }
-
+      if (uniqueRows.length < json.length) showToast(`${json.length - uniqueRows.length} duplicate or invalid rows skipped.`, 'warning');
       let rowsToProcess = uniqueRows;
       if (uniqueRows.length > 250) {
-        showToast('Only first 250 rows are allowed. Remaining rows will be skipped.', 'info');
+        showToast('Only first 250 rows are allowed.', 'info');
         rowsToProcess = uniqueRows.slice(0, 250);
       }
 
       const res = await api.post('/faq-hierarchy/bulk', rowsToProcess);
       setResults(res.data);
       if (res.data.success_count > 0) {
-        showToast(`Successfully uploaded ${res.data.success_count} rows`, 'success');
-        loadInitialData(); // Refresh the hierarchy tree
+        showToast(`Successfully uploaded ${res.data.success_count} FAQs`, 'success');
+        loadInitialData();
       }
     } catch (err) {
-      console.error(err);
       showToast('Error uploading file', 'error');
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
-  return (
-    <ModalWrapper isOpen={isOpen} onClose={onClose} title="Bulk Upload FAQs" icon={UploadCloud} iconColor="text-teal-400">
-      <div className="space-y-6">
-        {!results ? (
-          <>
-            <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-200">
-              <h3 className="text-sm font-bold text-gray-900 mb-2">Instructions</h3>
-              <p className="text-sm text-gray-500 mb-3">Upload a CSV or Excel file to bulk import your FAQ hierarchy. The required columns are: <strong>Domain, Category, Question, Answer</strong>. Domain must be present. Unprovided optional columns will default to "General". <span className="text-amber-400 font-bold block mt-1">Maximum 250 rows only allowed. Remaining rows will be skipped.</span></p>
-              <button onClick={handleDownloadSample} className="text-teal-400 hover:text-teal-300 text-sm flex items-center gap-1 font-medium transition-colors"><Download size={16}/> Download Sample Template</button>
-            </div>
-            
+  const handleDocUpload = async () => {
+    if (docType === 'file' && !docFile) return;
+    if (docType === 'text' && !docText.trim()) return;
+    if (!docTitle.trim()) { showToast('Document Category / Title is required', 'error'); return; }
+    
+    setDocLoading(true);
+    setDocResults(null);
+    try {
+      const formData = new FormData();
+      formData.append("domain_id", domain.id);
+      
+      if (docType === 'file') {
+        formData.append("file", docFile);
+        formData.append("source_title", docTitle.trim());
+      } else {
+        const textBlob = new Blob([docText], { type: 'text/plain' });
+        const fileObj = new File([textBlob], `${docTitle.trim()}.txt`, { type: 'text/plain' });
+        formData.append("file", fileObj);
+        formData.append("source_title", docTitle.trim());
+      }
+
+      const res = await api.post('/documents/upload', formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      setDocResults(res.data);
+      showToast('Document uploaded successfully and is being processed.', 'success');
+      loadInitialData();
+    } catch (err) {
+      showToast(err.response?.data?.detail || 'Error uploading document', 'error');
+    } finally { setDocLoading(false); }
+  };
+
+  const renderFaqTab = () => (
+    <div className="space-y-6">
+      {!results ? (
+        <>
+          <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-200">
+            <h3 className="text-sm font-bold text-gray-900 mb-2">Instructions</h3>
+            <p className="text-sm text-gray-500 mb-3">Upload a CSV or Excel file to bulk import FAQs into <strong>{domain?.domain_url}</strong>. The required columns are: <strong>Category, Question, Answer</strong>. <span className="text-amber-400 font-bold block mt-1">Maximum 250 rows allowed.</span></p>
+            <button onClick={handleDownloadSample} className="text-teal-600 hover:text-teal-500 text-sm flex items-center gap-1 font-medium transition-colors"><Download size={16}/> Download Sample Template</button>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Select File (.csv, .xlsx)</label>
+            <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" onChange={handleFileChange} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-teal-500/10 file:text-teal-600 hover:file:bg-teal-500/20 transition-colors" />
+          </div>
+          <div className="flex justify-end pt-4">
+            <button onClick={onClose} className="px-5 py-2 text-sm text-gray-700 hover:text-gray-900 mr-3">Cancel</button>
+            <button onClick={handleUploadFAQ} disabled={!file || loading} className="px-6 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-gray-900 rounded-xl text-sm font-bold shadow-lg shadow-teal-500/20 flex items-center gap-2">
+              {loading ? <RefreshCw className="h-4 w-4 animate-spin"/> : <UploadCloud className="h-4 w-4"/>}
+              {loading ? 'Processing...' : 'Upload FAQs'}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="space-y-4">
+          <div className="p-4 rounded-xl bg-white border border-gray-200 flex items-center justify-between">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Select File (.csv, .xls, .xlsx)</label>
-              <input type="file" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" onChange={handleFileChange} className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-teal-500/10 file:text-teal-400 hover:file:bg-teal-500/20 transition-colors" />
+              <h3 className="text-lg font-bold text-gray-900">Upload Summary</h3>
+              <p className="text-sm text-gray-500">Processing complete</p>
             </div>
-
-            <div className="flex justify-end pt-4">
-              <button onClick={onClose} className="px-5 py-2 text-sm text-gray-700 hover:text-gray-900 mr-3">Cancel</button>
-              <button onClick={handleUpload} disabled={!file || loading} className="px-6 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-gray-900 rounded-xl text-sm font-bold shadow-lg shadow-teal-500/20 flex items-center gap-2">
-                {loading ? <RefreshCw className="h-4 w-4 animate-spin"/> : <UploadCloud className="h-4 w-4"/>}
-                {loading ? 'Processing...' : 'Upload Data'}
-              </button>
-            </div>
-          </>
-        ) : (
-          <div className="space-y-4">
-            <div className="p-4 rounded-xl bg-white border border-gray-200 flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-gray-900">Upload Summary</h3>
-                <p className="text-sm text-gray-500">Processing complete</p>
-              </div>
-              <div className="text-right">
-                <div className="text-3xl font-bold text-emerald-400">{results.success_count}</div>
-                <div className="text-xs text-gray-500 uppercase font-bold tracking-wider">Rows Success</div>
-              </div>
-            </div>
-
-            {results.errors && results.errors.length > 0 && (
-              <div className="bg-red-100 border border-red-500/20 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-gray-500 mb-3 font-bold text-sm">
-                  <ShieldAlert size={16}/> {results.errors.length} Rows Failed Validation
-                </div>
-                <div className="max-h-40 overflow-y-auto custom-scrollbar pr-2 space-y-1">
-                  {results.errors.map((err, i) => (
-                    <div key={i} className="text-xs text-red-300 bg-red-950/30 p-2 rounded border border-red-900/50">
-                      {err}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            <div className="flex justify-end pt-4">
-              <button onClick={onClose} className="px-6 py-2 bg-gray-100 hover:bg-slate-600 text-gray-900 rounded-xl text-sm font-bold transition-colors">Close</button>
+            <div className="text-right">
+              <div className="text-3xl font-bold text-emerald-400">{results.success_count}</div>
+              <div className="text-xs text-gray-500 uppercase font-bold tracking-wider">Rows Success</div>
             </div>
           </div>
-        )}
-      </div>
+          {results.errors?.length > 0 && (
+            <div className="bg-red-100 border border-red-500/20 rounded-xl p-4">
+              <div className="flex items-center gap-2 text-gray-500 mb-3 font-bold text-sm"><ShieldAlert size={16}/> {results.errors.length} Rows Failed</div>
+              <div className="max-h-40 overflow-y-auto custom-scrollbar pr-2 space-y-1">
+                {results.errors.map((err, i) => <div key={i} className="text-xs text-red-600 bg-red-950/10 p-2 rounded border border-red-900/20">{err}</div>)}
+              </div>
+            </div>
+          )}
+          <div className="flex justify-end pt-4"><button onClick={onClose} className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-xl text-sm font-bold">Close</button></div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderDocTab = () => (
+    <div className="space-y-6">
+      {!docResults ? (
+        <>
+          <div className="flex gap-4 border-b border-gray-200 pb-2">
+            <button onClick={() => setDocType('file')} className={`text-sm font-medium pb-2 border-b-2 ${docType === 'file' ? 'border-teal-500 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Upload File (PDF/TXT/DOCX)</button>
+            <button onClick={() => setDocType('text')} className={`text-sm font-medium pb-2 border-b-2 ${docType === 'text' ? 'border-teal-500 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Paste Long Text</button>
+          </div>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Document Category / Title <span className="text-red-500">*</span></label>
+              <input type="text" value={docTitle} onChange={e => setDocTitle(e.target.value)} placeholder="e.g. Employee Handbook 2024" className="w-full bg-white border border-gray-200 text-gray-900 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-teal-500" />
+            </div>
+
+            {docType === 'file' ? (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Select File <span className="text-red-500">*</span></label>
+                <input type="file" accept=".pdf,.txt,.docx" onChange={e => { if (e.target.files?.length) setDocFile(e.target.files[0]) }} className="block w-full text-sm text-gray-900 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-teal-500/10 file:text-teal-600 hover:file:bg-teal-500/20 transition-colors" />
+              </div>
+            ) : (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Content <span className="text-red-500">*</span></label>
+                <textarea rows={8} value={docText} onChange={e => setDocText(e.target.value)} placeholder="Paste your long document content here..." className="w-full bg-white border border-gray-200 text-gray-900 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-teal-500 resize-none"></textarea>
+              </div>
+            )}
+          </div>
+
+          <div className="flex justify-end pt-4">
+            <button onClick={onClose} className="px-5 py-2 text-sm text-gray-700 hover:text-gray-900 mr-3">Cancel</button>
+            <button onClick={handleDocUpload} disabled={(docType==='file'?!docFile:!docText) || !docTitle.trim() || docLoading} className="px-6 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-gray-900 rounded-xl text-sm font-bold shadow-lg shadow-teal-500/20 flex items-center gap-2">
+              {docLoading ? <RefreshCw className="h-4 w-4 animate-spin"/> : <UploadCloud className="h-4 w-4"/>}
+              {docLoading ? 'Uploading...' : 'Upload Document'}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="space-y-4">
+           <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex flex-col items-center justify-center text-center py-8">
+             <CheckCircle2 className="h-12 w-12 text-emerald-500 mb-3" />
+             <h3 className="text-lg font-bold text-gray-900">Document Uploaded</h3>
+             <p className="text-sm text-gray-500 mt-1">The document has been queued and is processing in the background.</p>
+           </div>
+           <div className="flex justify-end pt-4"><button onClick={onClose} className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-xl text-sm font-bold">Close</button></div>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <ModalWrapper isOpen={isOpen} onClose={onClose} title={activeTab === 'faq' ? `Bulk Upload FAQs to ${domain?.domain_url}` : `Upload Document to ${domain?.domain_url}`} icon={UploadCloud} iconColor="text-teal-400">
+      {activeTab === 'faq' ? renderFaqTab() : renderDocTab()}
     </ModalWrapper>
   );
 }
+
+
