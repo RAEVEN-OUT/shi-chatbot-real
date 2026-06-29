@@ -5,11 +5,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/contexts/ToastContext';
 import { domainService } from '@/services/domainService';
 import { confirmAction } from '@/utils/confirm';
-import { Plus, Globe, ShieldCheck, Activity, Copy, Check, ArrowRight, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Globe, ShieldCheck, Activity, Copy, Check, ArrowRight, Trash2, Loader2, Download } from 'lucide-react';
 import Link from 'next/link';
 
 import { CardSkeleton } from '@/components/loaders/Skeletons';
 import ImageCropperModal from '@/components/ui/ImageCropperModal';
+import BulkDownloadModal from '@/components/ui/BulkDownloadModal';
 
 export default function Domains() {
   const { currentUser } = useAuth();
@@ -21,6 +22,7 @@ export default function Domains() {
   const [deletingId, setDeletingId] = useState(null);
   const [selectedDomains, setSelectedDomains] = useState(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [bulkDownloadOpen, setBulkDownloadOpen] = useState(false);
 
   // New Domain Form State (Pruned of technical AI/vector configurations)
   const [newDomain, setNewDomain] = useState({
@@ -282,6 +284,13 @@ export default function Domains() {
             </button>
           )}
           <button 
+            onClick={() => setBulkDownloadOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-50 hover:bg-gray-100 text-gray-900 border border-gray-200 rounded-xl font-medium transition-colors"
+          >
+            <Download size={18} />
+            Bulk Download
+          </button>
+          <button 
             onClick={() => setModalOpen(true)}
             className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl font-medium transition-colors"
           >
@@ -528,14 +537,22 @@ export default function Domains() {
       )}
 
       {/* Image Cropper Modal */}
-      {cropImageSrc && createPortal(
+      {cropImageSrc && (
         <ImageCropperModal
+          isOpen={!!cropImageSrc}
+          onClose={() => setCropImageSrc(null)}
           imageSrc={cropImageSrc}
           onCropComplete={handleCropComplete}
-          onCancel={() => setCropImageSrc(null)}
-        />,
-        document.body
+          cropShape="round"
+          aspect={1}
+        />
       )}
+
+      {/* Bulk Download Modal */}
+      <BulkDownloadModal 
+        isOpen={bulkDownloadOpen} 
+        onClose={() => setBulkDownloadOpen(false)} 
+      />
     </div>
   );
 }
