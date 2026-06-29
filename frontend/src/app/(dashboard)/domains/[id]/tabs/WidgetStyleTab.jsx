@@ -51,20 +51,16 @@ export default function WidgetStyleTab({ domain }) {
     fetchStyle();
   }, [domain.id]);
 
-  let withoutApiUrl = process.env.NEXT_PUBLIC_WITHOUT_API_URL || process.env.NEXT_PUBLIC_API_URL;
-  if (withoutApiUrl) {
-    withoutApiUrl = withoutApiUrl.replace(/\/api\/?$/, '');
-  } else {
-    withoutApiUrl = 'http://localhost:8000';
-  }
-
+  const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "");
   const snippet = `<!-- AI Chatbot Embed Widget -->
 <script>
   window.CHATBOT_CONFIG = {
     apiKey: "${domain.id}"
   };
 </script>
-<script src="${withoutApiUrl}/public/widget/widget.min.js" async></script>`;
+<script src="${siteUrl}/public/widget/widget.min.js" async></script>`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(snippet);
@@ -336,7 +332,7 @@ export default function WidgetStyleTab({ domain }) {
     apiKey: "`}<span className="text-amber-500">{domain.id}</span>{`"
   };
 </script>
-<script src="`}<span className="text-emerald-500">{withoutApiUrl}</span>{`/public/widget/widget.min.js" async></script>`}
+<script src="`}<span className="text-emerald-500">{siteUrl}</span>{`/public/widget/widget.min.js" async></script>`}
             </code>
           </pre>
         </div>
