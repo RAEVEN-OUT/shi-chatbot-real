@@ -20,7 +20,7 @@ from routers import (
     auth_routes, chatbot_routes, faq_routes, domain_routes, chat_session_routes,
     failed_question_routes, widget_routes, faq_category_routes, faq_question_routes,
     leads_routes, analytics_routes, settings_routes, faq_bulk_routes, audit_routes,
-    upload_routes
+    upload_routes, document_routes
 )
 from fastapi.staticfiles import StaticFiles
 import os
@@ -45,6 +45,7 @@ app.include_router(settings_routes.router)
 app.include_router(faq_bulk_routes.router)
 app.include_router(audit_routes.router)
 app.include_router(upload_routes.router)
+app.include_router(document_routes.router)
 
 public_dir = os.path.join(os.path.dirname(__file__), "public")
 if os.path.exists(public_dir):

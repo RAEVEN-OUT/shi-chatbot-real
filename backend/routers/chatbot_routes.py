@@ -4,6 +4,7 @@ from sqlalchemy.future import select
 from pydantic import BaseModel
 from database.database import get_db, AsyncSessionLocal
 from database.models import Domain, FailedQuestion, DomainCategory, FAQQuestion, FAQCategory
+from schemas.retrieval import KnowledgeSource
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
 from services.redis_service import redis_service
@@ -236,27 +237,56 @@ async def ask_chatbot(
 
     # Merge and deduplicate — FTS first
     seen = set()
-    top_chunks = []
+    knowledge_sources = []
     for chunk in fts_chunks + qdrant_chunks:
         p = chunk.get("payload", {})
-        key = (p.get("question") or p.get("text", ""))[:100].lower()
+        
+        if p.get("question_id"):
+            key = f"faq_{p['question_id']}"
+        elif p.get("document_source_id") and p.get("chunk_index") is not None:
+            key = f"doc_{p['document_source_id']}_{p['chunk_index']}"
+        else:
+            text = p.get("question") or p.get("text", "")
+            key = hashlib.sha256(text.encode('utf-8')).hexdigest()
+            
         if key not in seen:
             seen.add(key)
-            top_chunks.append(chunk)
+            if "answer" in p:
+                content = f"Question:\n{p.get('question', '')}\nAnswer:\n{p['answer']}"
+                source_type = "FAQ"
+            else:
+                content = p.get("text", "")
+                source_type = "Document"
+                
+            knowledge_sources.append(KnowledgeSource(
+                id=key,
+                source_type=source_type,
+                score=chunk.get("score", 0),
+                content=content,
+                metadata=p
+            ))
 
-    top_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
-    top_chunks = top_chunks[:5]
+    knowledge_sources.sort(key=lambda x: x.score, reverse=True)
+    top_sources = knowledge_sources[:5]
 
-    if not top_chunks:
+    retrieval_summary = [{"type": src.source_type, "score": round(src.score, 4)} for src in top_sources]
+    logger.info({
+        "event": "RETRIEVAL_SUMMARY",
+        "question": request.message,
+        "results": retrieval_summary,
+        "total": len(top_sources)
+    })
+
+    if not top_sources:
         logger.info({"event": "NO_MATCH", "question": request.message, "resolved": resolved_query})
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, fallback, "NO_MATCH")
         return {"answer": fallback, "cached": False, "sources": 0}
 
-    max_score = top_chunks[0].get("score", 0)
+    max_score = top_sources[0].score
 
     # 5. Fast path
     if max_score >= 0.95:
-        fast_answer = top_chunks[0].get("payload", {}).get("answer")
+        fast_answer = top_sources[0].metadata.get("answer")
         if fast_answer:
             logger.info({"event": "FAST_PATH", "question": request.message, "score": max_score})
             background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": fast_answer}, 3600)
@@ -266,16 +296,12 @@ async def ask_chatbot(
     if max_score < 0.60:
         logger.info({"event": "LOW_CONFIDENCE", "question": request.message, "score": max_score})
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, fallback, "LOW_CONFIDENCE")
-        return {"answer": fallback, "cached": False, "sources": len(top_chunks)}
+        return {"answer": fallback, "cached": False, "sources": len(top_sources)}
 
     # 7. LLM path
     context_parts = []
-    for chunk in top_chunks:
-        p = chunk.get("payload", {})
-        if "answer" in p:
-            context_parts.append(f"Q: {p.get('question', '')}\nA: {p['answer']}")
-        else:
-            context_parts.append(p.get("text", ""))
+    for i, item in enumerate(top_sources, 1):
+        context_parts.append(f"Source {i} ({item.source_type})\n{item.content}")
     context_text = "\n\n".join(context_parts)
 
     history_text = ""

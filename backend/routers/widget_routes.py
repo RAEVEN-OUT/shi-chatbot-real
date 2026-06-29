@@ -29,6 +29,8 @@ from database.models import Domain, ChatSession, ChatMessage, Lead, FailedQuesti
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
 from services.redis_service import redis_service
+from utils.llm_logger import log_failed_question
+from schemas.retrieval import KnowledgeSource
 from utils.nlp_utils import normalize_query
 from utils.intent_utils import detect_intent
 from utils.ws_manager import manager
@@ -673,19 +675,48 @@ async def widget_chat_websocket(
 
                 # Merge: FTS first (exact keyword wins), then semantic
                 seen = set()
-                top_chunks = []
+                knowledge_sources = []
                 for chunk in fts_chunks + qdrant_chunks:
                     p = chunk.get("payload", {})
-                    key = (p.get("question") or p.get("text", ""))[:100].lower()
+                    
+                    if p.get("question_id"):
+                        key = f"faq_{p['question_id']}"
+                    elif p.get("document_source_id") and p.get("chunk_index") is not None:
+                        key = f"doc_{p['document_source_id']}_{p['chunk_index']}"
+                    else:
+                        text = p.get("question") or p.get("text", "")
+                        key = hashlib.sha256(text.encode('utf-8')).hexdigest()
+                        
                     if key not in seen:
                         seen.add(key)
-                        top_chunks.append(chunk)
+                        if "answer" in p:
+                            content = f"Question:\n{p.get('question', '')}\nAnswer:\n{p['answer']}"
+                            source_type = "FAQ"
+                        else:
+                            content = p.get("text", "")
+                            source_type = "Document"
+                            
+                        knowledge_sources.append(KnowledgeSource(
+                            id=key,
+                            source_type=source_type,
+                            score=chunk.get("score", 0),
+                            content=content,
+                            metadata=p
+                        ))
 
-                top_chunks.sort(key=lambda x: x.get("score", 0), reverse=True)
-                top_chunks = top_chunks[:5]
+                knowledge_sources.sort(key=lambda x: x.score, reverse=True)
+                top_sources = knowledge_sources[:5]
+
+                retrieval_summary = [{"type": src.source_type, "score": round(src.score, 4)} for src in top_sources]
+                logger.info({
+                    "event": "RETRIEVAL_SUMMARY",
+                    "question": user_msg,
+                    "results": retrieval_summary,
+                    "total": len(top_sources)
+                })
 
                 # ── No match ───────────────────────────────────────────────────
-                if not top_chunks:
+                if not top_sources:
                     logger.info({"event": "NO_MATCH", "question": user_msg, "resolved": resolved_query})
                     await websocket.send_json({"type": "stream_delta", "text": fallback})
                     await websocket.send_json({"type": "stream_done"})
@@ -700,18 +731,18 @@ async def widget_chat_websocket(
                     ))
                     continue
 
-                max_score = top_chunks[0].get("score", 0)
+                max_score = top_sources[0].score
 
                 # ── Fast path ≥ 0.95 ───────────────────────────────────────────
                 if max_score >= 0.95:
-                    fast_answer = top_chunks[0].get("payload", {}).get("answer")
+                    fast_answer = top_sources[0].metadata.get("answer")
                     if fast_answer:
                         logger.info({
                             "event": "FAST_PATH",
                             "question": user_msg,
                             "resolved": resolved_query,
                             "score": max_score,
-                            "matched": top_chunks[0].get("payload", {}).get("question")
+                            "matched": top_sources[0].metadata.get("question")
                         })
                         await websocket.send_json({"type": "stream_delta", "text": fast_answer})
                         await websocket.send_json({"type": "stream_done"})
@@ -751,14 +782,8 @@ async def widget_chat_websocket(
 
                 # FIX #9: build context from answer field, not raw Q:A text blob
                 context_parts = []
-                for chunk in top_chunks:
-                    p = chunk.get("payload", {})
-                    if "answer" in p:
-                        # Use structured Q+A for richest context
-                        context_parts.append(f"Q: {p.get('question', '')}\nA: {p['answer']}")
-                    else:
-                        text = p.get("text", "")
-                        context_parts.append(text)
+                for i, item in enumerate(top_sources, 1):
+                    context_parts.append(f"Source {i} ({item.source_type})\n{item.content}")
                 context_text = "\n\n".join(context_parts)
 
                 # Build prompt with summary + recent history

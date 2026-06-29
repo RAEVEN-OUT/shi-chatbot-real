@@ -193,3 +193,29 @@ class FailedQuestion(Base):
     )
     
     domain = relationship("Domain")
+
+
+class DocumentSource(Base):
+    """Tracks every document uploaded for RAG ingestion."""
+    __tablename__ = "document_sources"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    organization_id = Column(String, ForeignKey("organizations.id"), index=True, nullable=False)
+    domain_id = Column(String, ForeignKey("domains.id"), index=True, nullable=True)
+    source_title = Column(String, nullable=False)
+    filename = Column(String, nullable=False)
+    file_type = Column(String, nullable=False)         # pdf | txt | docx
+    file_size = Column(Integer, nullable=True)
+    status = Column(String, default="processing")      # processing | ready | failed
+    chunk_count = Column(Integer, default=0)
+    error_message = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_document_sources_org_status", "organization_id", "status"),
+        Index("ix_document_sources_domain", "domain_id"),
+    )
+
+    organization = relationship("Organization")
+    domain = relationship("Domain")
