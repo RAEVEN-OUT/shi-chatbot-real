@@ -43,6 +43,8 @@ router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 FTS_FAST_PATH_RANK = 0.35        
 SEMANTIC_FAST_PATH_SCORE = 0.95  
 LOW_CONFIDENCE_SCORE = 0.60
+TOKEN_BUDGET = 3000
+
 FOLLOWUP_PRONOUNS = {"it", "that", "this", "they", "those", "he", "she", "them", "these", "his", "hers"}
 FOLLOWUP_CONJUNCTIONS = ("and ", "but ", "so ", "because ", "or ", "then ", "what about ", "how about ")
 
@@ -56,6 +58,17 @@ class ChatRequest(BaseModel):
 class PerformanceMetrics:
     req_start_t: float = field(default_factory=time.perf_counter)
     metrics: Dict[str, float] = field(default_factory=dict)
+    analytics: Dict[str, Any] = field(default_factory=lambda: {
+        "cache_hit": False,
+        "fts_hit": False,
+        "semantic_hit": False,
+        "fts_fast_path": False,
+        "semantic_fast_path": False,
+        "rewrite_used": False,
+        "retrieved_chunks": 0,
+        "prompt_size": 0,
+        "completion_length": 0
+    })
     
     def record(self, key: str, start_t: float):
         self.metrics[key] = round((time.perf_counter() - start_t) * 1000, 2)
@@ -64,8 +77,10 @@ class PerformanceMetrics:
         return round((time.perf_counter() - self.req_start_t) * 1000, 2)
         
     def to_dict(self) -> dict:
-        self.metrics["total_duration"] = self.get_total_duration()
-        return self.metrics
+        out = dict(self.metrics)
+        out.update(self.analytics)
+        out["total_duration"] = self.get_total_duration()
+        return out
 
 @dataclass
 class DomainContext:
@@ -87,6 +102,8 @@ class RetrievalResult:
     sources: List[KnowledgeSource]
     max_score: float
     used_fast_path: bool = False
+    faq_count: int = 0
+    doc_count: int = 0
 
 # --- Helpers ---
 def _looks_like_followup(normalized_q: str, chat_history: list) -> bool:
@@ -114,6 +131,63 @@ def _looks_like_followup(normalized_q: str, chat_history: list) -> bool:
         return True
         
     return False
+
+def _validate_and_clean_response(text: str, fallback: str) -> str:
+    if not text or not text.strip():
+        return fallback
+
+    if text.count("```") % 2 != 0:
+        text += "\n```"
+
+    lines = text.split('\n')
+    cleaned_lines = []
+    seen_p = set()
+    
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            cleaned_lines.append(line)
+            continue
+            
+        if re.match(r'^([-*]|\d+\.)\s*$', stripped):
+            continue 
+
+        norm = re.sub(r'[\W_]+', '', stripped.lower())
+        if len(norm) > 10:
+            if norm in seen_p:
+                continue
+            seen_p.add(norm)
+            
+        if not re.match(r'^([-*#|>`]|\d+\.)', stripped):
+            sentences = re.split(r'(?<=[.!?]) +', line)
+            seen_s = set()
+            unique_s = []
+            for s in sentences:
+                snorm = re.sub(r'[\W_]+', '', s.lower())
+                if len(snorm) > 5:
+                    if snorm in seen_s:
+                        continue
+                    seen_s.add(snorm)
+                unique_s.append(s)
+            line = " ".join(unique_s)
+            
+        cleaned_lines.append(line)
+        
+    cleaned_text = "\n".join(cleaned_lines).strip()
+    
+    if cleaned_text:
+        last_line = cleaned_text.split('\n')[-1].strip()
+        if re.match(r'^([-*]|\d+\.)', last_line):
+            if not re.search(r'[.!?`*"\])]$', last_line):
+                if last_line.endswith((" and", " the", " to", " with", " a", " of")):
+                    cleaned_text = cleaned_text[:cleaned_text.rfind('\n')].strip() if '\n' in cleaned_text else ""
+                else:
+                    cleaned_text += "."
+
+    if not cleaned_text.strip():
+        return fallback
+        
+    return cleaned_text
 
 async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: int = 5) -> list[KnowledgeSource]:
     """
@@ -221,14 +295,17 @@ async def _load_chat_history(session_id: str, fallback: str) -> list:
     ]
 
 async def _try_cache(cache_key: str, metrics: PerformanceMetrics, metric_key: str = "cache_lookup") -> Optional[ChatResponse]:
+    """Attempt to retrieve a cached LLM response to bypass full retrieval."""
     t0 = time.perf_counter()
     cached = await redis_service.get_cached_response(cache_key)
     metrics.record(metric_key, t0)
     if cached:
+        metrics.analytics["cache_hit"] = True
         return ChatResponse(answer=cached["answer"], cached=True)
     return None
 
 async def _handle_intent(request: ChatRequest, normalized_q: str, ctx: DomainContext, cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> Optional[ChatResponse]:
+    """Fast-path for conversational intents (greetings, thanks) that don't require RAG."""
     t0 = time.perf_counter()
     intent = detect_intent(normalized_q)
     metrics.record("intent_detection", t0)
@@ -260,16 +337,17 @@ async def _handle_intent(request: ChatRequest, normalized_q: str, ctx: DomainCon
         logger.info({"event": "INTENT_PATH", "intent": intent, "question": request.message})
         background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": ans}, 3600)
         if request.session_id:
-            background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, ans)
+            background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, ans, normalized_q)
         return ChatResponse(answer=ans, cached=False, sources=0)
 
     return None
 
 async def _maybe_rewrite_query(normalized_q: str, chat_history: list, metrics: PerformanceMetrics) -> str:
+    """Resolve follow-up references using either local heuristics or LLM rewriting."""
     if not _looks_like_followup(normalized_q, chat_history):
         return normalized_q
         
-    last_user = chat_history[-1].get("user", "")
+    last_topic = chat_history[-1].get("topic", chat_history[-1].get("user", ""))
     q_lower = normalized_q.lower()
     words = set(q_lower.split())
     
@@ -281,22 +359,25 @@ async def _maybe_rewrite_query(normalized_q: str, chat_history: list, metrics: P
     
     if has_pronoun or has_prefix:
         t0 = time.perf_counter()
-        resolved_query = f"{last_user} {normalized_q}"
+        resolved_query = f"{last_topic} {normalized_q}"
         logger.info(f"Local query rewrite: '{normalized_q}' → '{resolved_query}'")
         metrics.record("rewrite_query", t0)
+        metrics.analytics["rewrite_used"] = True
         return resolved_query
 
     t0 = time.perf_counter()
     try:
         resolved_query = await ollama_service.rewrite_query(chat_history, normalized_q)
         logger.info(f"LLM query rewrite: '{normalized_q}' → '{resolved_query}'")
+        metrics.analytics["rewrite_used"] = True
     except Exception as e:
         logger.error(f"Query rewrite failed: {e}")
         resolved_query = normalized_q
     metrics.record("rewrite_query", t0)
     return resolved_query
 
-async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, ctx: DomainContext, cache_key: str, db: AsyncSession, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> Optional[ChatResponse]:
+async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_topic: str, ctx: DomainContext, cache_key: str, db: AsyncSession, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> Optional[ChatResponse]:
+    """Execute a lightweight Postgres Full-Text Search and return early if confidence is very high."""
     if not ctx.has_faqs:
         return None
         
@@ -309,6 +390,7 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, ctx: Dom
     metrics.record("fts_retrieval", t0)
     
     if fts_chunks:
+        metrics.analytics["fts_hit"] = True
         logger.info({
             "event": "FTS_EVALUATION",
             "question": resolved_query,
@@ -319,6 +401,7 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, ctx: Dom
         })
 
     if fts_chunks and fts_chunks[0].score >= FTS_FAST_PATH_RANK:
+        metrics.analytics["fts_fast_path"] = True
         top = fts_chunks[0]
         fast_answer = top.metadata.get("answer")
         if fast_answer:
@@ -331,12 +414,13 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, ctx: Dom
             })
             background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": fast_answer}, 3600)
             if request.session_id:
-                background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, fast_answer)
+                background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, fast_answer, current_topic)
             return ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
             
     return None
 
 async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash: str, ctx: DomainContext, cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> tuple[Optional[RetrievalResult], Optional[ChatResponse]]:
+    """Perform embedding generation, Qdrant vector search, chunk expansion, and result deduplication."""
     t0 = time.perf_counter()
     query_vector = await redis_service.get_cached_embedding(q_hash)
     if not query_vector:
@@ -380,29 +464,58 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
 
     knowledge_sources.sort(key=lambda x: x.score, reverse=True)
     
+    t0 = time.perf_counter()
+    try:
+        expansion_map = await qdrant_service.expand_document_chunks(
+            tenant_id=ctx.domain.organization_id,
+            sources=knowledge_sources
+        )
+    except Exception as e:
+        logger.error(f"Chunk expansion error: {e}")
+        expansion_map = {}
+    metrics.record("chunk_expansion", t0)
+    
     top_sources = []
     current_tokens = 0
-    TOKEN_BUDGET = 3000
     
     for item in knowledge_sources:
-        formatted_source = (
-            f"--------------------------------\n"
-            f"Source\n"
-            f"Type\n"
-            f"{item.source_type}\n"
-            f"Content\n"
-            f"{item.content}\n"
-            f"--------------------------------"
-        )
+        formatted_source = f"[Source: {item.source_type}]\n{item.content}"
         source_tokens = _estimate_tokens(formatted_source)
+        
         if current_tokens + source_tokens > TOKEN_BUDGET:
             break
             
+        if item.source_type == "Document" and expansion_map:
+            doc_id = item.metadata.get("document_source_id")
+            idx = item.metadata.get("chunk_index")
+            if doc_id and idx is not None:
+                prev_text = expansion_map.get((doc_id, idx - 1))
+                next_text = expansion_map.get((doc_id, idx + 1))
+                
+                expanded_content = item.content
+                if prev_text:
+                    prev_tokens = _estimate_tokens(prev_text)
+                    if current_tokens + source_tokens + prev_tokens <= TOKEN_BUDGET:
+                        expanded_content = f"{prev_text}\n\n{expanded_content}"
+                        source_tokens += prev_tokens
+                        
+                if next_text:
+                    next_tokens = _estimate_tokens(next_text)
+                    if current_tokens + source_tokens + next_tokens <= TOKEN_BUDGET:
+                        expanded_content = f"{expanded_content}\n\n{next_text}"
+                        source_tokens += next_tokens
+                        
+                item.content = expanded_content
+                
         top_sources.append(item)
         current_tokens += source_tokens
 
     faq_count = sum(1 for src in top_sources if src.source_type == "FAQ")
     doc_count = sum(1 for src in top_sources if src.source_type == "Document")
+
+    metrics.analytics["retrieved_chunks"] = len(top_sources)
+    if top_sources:
+        metrics.analytics["semantic_hit"] = True
 
     base_log = {
         "event": "RETRIEVAL_SUMMARY",
@@ -413,14 +526,24 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     }
 
     if not top_sources:
-        base_log["reason"] = "NO_MATCH"
+        if not ctx.has_faqs and not ctx.has_docs:
+            fail_reason = "no context"
+        elif not ctx.has_faqs:
+            fail_reason = "no FAQ"
+        elif not ctx.has_docs:
+            fail_reason = "no document"
+        else:
+            fail_reason = "no context"
+            
+        base_log["reason"] = fail_reason
         logger.info(base_log)
-        background_tasks.add_task(log_failed_question, request.domain_id, request.message, ctx.fallback, "NO_MATCH")
+        background_tasks.add_task(log_failed_question, request.domain_id, request.message, ctx.fallback, fail_reason)
         return None, ChatResponse(answer=ctx.fallback, cached=False, sources=0)
 
     max_score = top_sources[0].score
 
     if top_sources[0].source_type == "FAQ" and max_score >= SEMANTIC_FAST_PATH_SCORE:
+        metrics.analytics["semantic_fast_path"] = True
         fast_answer = top_sources[0].metadata.get("answer")
         if fast_answer:
             base_log["reason"] = "SEMANTIC_FAST_PATH"
@@ -430,28 +553,68 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
             return None, ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
 
     if max_score < LOW_CONFIDENCE_SCORE:
-        base_log["reason"] = "LOW_CONFIDENCE"
+        base_log["reason"] = "low semantic score"
         base_log["score"] = max_score
         logger.info(base_log)
-        background_tasks.add_task(log_failed_question, request.domain_id, request.message, ctx.fallback, "LOW_CONFIDENCE")
+        background_tasks.add_task(log_failed_question, request.domain_id, request.message, ctx.fallback, "low semantic score")
         return None, ChatResponse(answer=ctx.fallback, cached=False, sources=len(top_sources))
 
-    return RetrievalResult(sources=top_sources, max_score=max_score), None
+    return RetrievalResult(
+        sources=top_sources, 
+        max_score=max_score, 
+        faq_count=faq_count, 
+        doc_count=doc_count
+    ), None
 
-async def _build_context_and_call_llm(request: ChatRequest, ctx: DomainContext, chat_history: list, result: RetrievalResult, cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> ChatResponse:
+def _detect_query_intent(query: str, top_source_type: str) -> str:
+    """Classify the user's intent to choose the optimal prompt layout."""
+    q_lower = query.lower().strip()
+    if q_lower.startswith(("is ", "are ", "can ", "could ", "do ", "does ", "will ", "would ", "should ", "did ", "has ", "have ", "was ", "were ")):
+        return "yes/no"
+    if any(kw in q_lower for kw in (" vs ", " versus ", " difference between ", " compare ", " better ", " best ")):
+        return "comparison"
+    if q_lower.startswith(("what is ", "define ", "meaning of ", "what does ")):
+        return "definition"
+    if q_lower.startswith(("how to ", "how do ", "how can ", "steps to ", "guide ")):
+        return "procedural"
+    if any(kw in q_lower for kw in ("error", "failed", "not working", "fix", "issue", "problem", "broken")):
+        return "troubleshooting"
+    if any(kw in q_lower for kw in ("list", "all the", "examples of", "what are the")):
+        return "list"
+    if top_source_type == "FAQ":
+        return "FAQ"
+    return "general"
+
+async def _build_context_and_call_llm(request: ChatRequest, current_topic: str, ctx: DomainContext, chat_history: list, result: RetrievalResult, cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> ChatResponse:
+    """Assemble final context, apply intent-based templates, and generate the final LLM output."""
     t0 = time.perf_counter()
+    
+    seen_paragraphs = set()
     context_parts = []
+    
     for i, item in enumerate(result.sources, 1):
-        context_parts.append(
-            f"--------------------------------\n"
-            f"Source {i}\n"
-            f"Type\n"
-            f"{item.source_type}\n"
-            f"Content\n"
-            f"{item.content}\n"
-            f"--------------------------------"
-        )
-    context_text = "\n".join(context_parts)
+        if item.source_type == "FAQ":
+            # Keep FAQs intact but remove extra whitespace
+            cleaned_content = re.sub(r'\n{2,}', '\n', item.content.strip())
+            # Prevent Documents from repeating FAQ information
+            for p in cleaned_content.split('\n'):
+                seen_paragraphs.add(re.sub(r'[\W_]+', '', p.lower()))
+            context_parts.append(f"[Source {i}: {item.source_type}]\n{cleaned_content}")
+        else:
+            # Compress repeated paragraphs in Documents (e.g. overlap in chunks)
+            paragraphs = [p.strip() for p in item.content.split('\n') if p.strip()]
+            unique_paragraphs = []
+            for p in paragraphs:
+                norm_p = re.sub(r'[\W_]+', '', p.lower())
+                if norm_p and norm_p not in seen_paragraphs:
+                    seen_paragraphs.add(norm_p)
+                    unique_paragraphs.append(p)
+            
+            if unique_paragraphs:
+                cleaned_content = "\n".join(unique_paragraphs)
+                context_parts.append(f"[Source {i}: {item.source_type}]\n{cleaned_content}")
+                
+    context_text = "\n\n".join(context_parts)
 
     history_text = ""
     if chat_history:
@@ -460,41 +623,31 @@ async def _build_context_and_call_llm(request: ChatRequest, ctx: DomainContext, 
             lines.append(f"User: {m['user']}\nAssistant: {m['ai']}")
         history_text = "\n\n" + "\n".join(lines)
 
+    top_source_type = result.sources[0].source_type if result.sources else "Document"
+    intent = _detect_query_intent(request.message, top_source_type)
+    
+    templates = {
+        "yes/no": "4. Start with 'Yes.' or 'No.', then write a 1-sentence explanation in a single paragraph.",
+        "comparison": "4. Compare the items requested using a Markdown table. Do not add conversational text.",
+        "definition": "4. Provide a 1-2 sentence definition in a single paragraph.",
+        "procedural": "4. Provide step-by-step instructions using a numbered list. Do not use bold/italics unnecessarily.",
+        "troubleshooting": "4. Identify the cause and provide a solution using a numbered list.",
+        "list": "4. Extract the requested items into a bullet list.",
+        "FAQ": "4. Answer directly and concisely in a single paragraph.",
+        "general": "4. Answer naturally and concisely (1-5 sentences) in a single paragraph."
+    }
+    specific_rule = templates.get(intent, templates["general"])
+
     system_prompt = (
-        f"Identity\n"
-        f"--------\n"
         f"You are the AI assistant for {ctx.domain.domain_name}.\n\n"
-
-        f"Behaviour\n"
-        f"---------\n"
-        f"Answer naturally, professionally, and concisely.\n"
-        f"Correct obvious spelling mistakes silently.\n\n"
-
-        f"Rules\n"
-        f"-----\n"
-        f"1. Use ONLY the supplied Knowledge Base.\n"
-        f"2. Never use outside knowledge.\n"
-        f"3. If the answer cannot be completely supported by the Knowledge Base, reply EXACTLY:\n"
+        f"RULES:\n"
+        f"1. Answer ONLY using the Knowledge Base below. If the answer is missing, reply EXACTLY:\n"
         f"\"{ctx.fallback}\"\n"
-        f"4. Return only the information required to answer the user's question.\n"
-        f"5. Treat the Knowledge Base as reference material, not as the response.\n"
-        f"6. Extract the answer and write a new concise response.\n"
-        f"7. Do NOT copy large sections verbatim.\n"
-        f"8. Do NOT mention the Knowledge Base or its sources.\n"
-        f"9. Merge duplicate information into one concise answer.\n"
-        f"10. If the answer is a list, include only the relevant items.\n"
-        f"11. If the question is Yes/No, begin with 'Yes.' or 'No.' followed by one short explanation.\n"
-        f"12. Never begin answers with phrases like 'According to...', 'Based on...', or 'The Knowledge Base says...'.\n\n"
-
-        f"Target Response Length\n"
-        f"----------------------\n"
-        f"- Simple fact: 1 sentence.\n"
-        f"- Normal question: 1-2 sentences.\n"
-        f"- Complex explanation: Maximum 5 sentences unless the user explicitly requests more detail.\n\n"
-
+        f"2. Never mention the 'Knowledge Base', 'Sources', or say 'According to...'. Do NOT copy verbatim.\n"
+        f"3. Correct user spelling silently.\n"
+        f"{specific_rule}\n\n"
         f"{history_text}\n\n"
-        f"Knowledge Base\n"
-        f"--------------\n"
+        f"KNOWLEDGE BASE:\n"
         f"{context_text}"
     )
     metrics.record("prompt_construction", t0)
@@ -506,30 +659,41 @@ async def _build_context_and_call_llm(request: ChatRequest, ctx: DomainContext, 
             system_prompt=system_prompt,
             user_query=request.message
         )
-        answer = _strip_preamble(answer)
+        answer = _validate_and_clean_response(_strip_preamble(answer), ctx.fallback)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
     metrics.record("llm_generation", t0)
 
     duration = time.time() - start_time
 
-    if ctx.fallback.lower() in answer.lower() or "i don't have enough information" in answer.lower():
-        background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, "LLM_FAILURE")
-        path = "LLM_FAILURE"
+    if not answer.strip():
+        path = "empty generation"
+        background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, path)
+        answer = ctx.fallback
+    elif any(refusal in answer.lower() for refusal in ["as an ai", "i cannot", "i am unable", "i apologize, but"]):
+        path = "model refusal"
+        background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, path)
+        answer = ctx.fallback
+    elif ctx.fallback.lower() in answer.lower() or "i don't have enough information" in answer.lower():
+        path = "hallucination prevented"
+        background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, path)
         answer = ctx.fallback
     else:
         background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": answer}, 3600)
         if request.session_id:
-            background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, answer)
+            background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, answer, current_topic)
         path = "LLM_PATH"
+
+    metrics.analytics["prompt_size"] = _estimate_tokens(system_prompt) + _estimate_tokens(request.message)
+    metrics.analytics["completion_length"] = _estimate_tokens(answer)
 
     base_log = {
         "event": "RETRIEVAL_SUMMARY",
         "question": request.message,
-        "faq_results": sum(1 for src in result.sources if src.source_type == "FAQ"),
-        "document_results": sum(1 for src in result.sources if src.source_type == "Document"),
+        "faq_results": result.faq_count,
+        "document_results": result.doc_count,
         "merged": len(result.sources),
-        "prompt_tokens": _estimate_tokens(system_prompt) + _estimate_tokens(request.message),
+        "prompt_tokens": metrics.analytics["prompt_size"],
         "llm_response_time": f"{duration:.1f}s",
         "reason": path,
         "score": result.max_score
@@ -571,6 +735,11 @@ async def ask_chatbot(
     resolved_query = await _maybe_rewrite_query(normalized_q, history, metrics)
     
     if resolved_query != normalized_q:
+        current_topic = history[-1].get("topic", history[-1].get("user", "")) if history else normalized_q
+    else:
+        current_topic = normalized_q
+    
+    if resolved_query != normalized_q:
         q_hash = hashlib.md5(resolved_query.lower().encode()).hexdigest()
         cache_key = f"chat:{request.domain_id}:{q_hash}"
         cached_resp = await _try_cache(cache_key, metrics, metric_key="cache_lookup_after_rewrite")
@@ -578,7 +747,7 @@ async def ask_chatbot(
             logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
             return cached_resp.__dict__
 
-    fts_resp = await _try_fts_fast_path(request, resolved_query, ctx, cache_key, db, background_tasks, metrics)
+    fts_resp = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
     if fts_resp:
         logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
         return fts_resp.__dict__
@@ -588,7 +757,7 @@ async def ask_chatbot(
         logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
         return semantic_resp.__dict__
 
-    final_resp = await _build_context_and_call_llm(request, ctx, history, retrieval_res, cache_key, background_tasks, metrics)
+    final_resp = await _build_context_and_call_llm(request, current_topic, ctx, history, retrieval_res, cache_key, background_tasks, metrics)
     
     logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
     return final_resp.__dict__

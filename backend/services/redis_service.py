@@ -73,12 +73,12 @@ class RedisService:
         data = await self.redis.lrange(f"chat_history:{session_id}", -limit, -1)
         return [json.loads(msg) for msg in data]
 
-    async def add_to_chat_history(self, session_id: str, question: str, answer: str, expire: int = 86400):
+    async def add_to_chat_history(self, session_id: str, question: str, answer: str, topic: str = None, expire: int = 86400):
         """Add a Q&A pair to the session's chat history."""
         if not session_id:
             return
         key = f"chat_history:{session_id}"
-        entry = {"user": question, "ai": answer}
+        entry = {"user": question, "ai": answer, "topic": topic or question}
         await self.redis.rpush(key, json.dumps(entry))
         # Keep only last 20 messages to prevent infinite growth
         await self.redis.ltrim(key, -20, -1)
