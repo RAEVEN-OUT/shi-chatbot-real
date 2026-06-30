@@ -13,7 +13,7 @@ import { confirmAction } from '@/utils/confirm';
 import { domainService } from '@/services/domainService';
 import ModalWrapper from '@/components/ui/ModalWrapper';
 import { Tabs } from './Tree';
-import { EditCategoryModal } from './Modals';
+import { EditCategoryModal, CategoryForm } from './Modals';
 
 export function CategoryManager({ deletingId, category, categories, setCategories, openModal, selectNode, handleDeleteNode, initialTab }) {
   const [activeTab, setActiveTab] = useState(initialTab || 'assignments');
@@ -36,7 +36,7 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
   }, [category]);
   
   useEffect(() => {
-    if (initialTab) setActiveTab(initialTab);
+    setActiveTab(initialTab || 'assignments');
   }, [initialTab, category.id]);
   
   const tabs = [
@@ -128,16 +128,25 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
           <div className="max-w-4xl space-y-4 m-6">
             <div className="flex justify-between items-center mb-2">
               <p className="text-sm text-gray-500">FAQs belonging to this category</p>
-              {selectedQuestions.size > 0 && (
+              <div className="flex items-center gap-2">
                 <button 
-                  onClick={handleBulkDeleteQuestions}
-                  disabled={isBulkDeleting}
-                  className="px-3 py-1.5 bg-red-100 text-red-600 rounded text-xs font-bold flex items-center gap-1 transition-colors hover:bg-red-200"
+                  onClick={() => setActiveTab('create')}
+                  className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded text-xs font-bold flex items-center gap-1 transition-colors hover:bg-blue-100"
                 >
-                  {isBulkDeleting ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                  Delete Selected ({selectedQuestions.size})
+                  <Plus size={14} />
+                  Add FAQ
                 </button>
-              )}
+                {selectedQuestions.size > 0 && (
+                  <button 
+                    onClick={handleBulkDeleteQuestions}
+                    disabled={isBulkDeleting}
+                    className="px-3 py-1.5 bg-red-100 text-red-600 rounded text-xs font-bold flex items-center gap-1 transition-colors hover:bg-red-200"
+                  >
+                    {isBulkDeleting ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                    Delete Selected ({selectedQuestions.size})
+                  </button>
+                )}
+              </div>
             </div>
             {!category.questionsLoaded ? <div className="text-sm text-gray-500 p-5 bg-white rounded-xl border border-gray-200">Expand this category in the tree view to load its FAQs.</div> : 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

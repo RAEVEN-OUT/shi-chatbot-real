@@ -90,7 +90,7 @@ export function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNod
             {type === 'folder' && data.folderType === 'category' && (
               <div className="relative mb-1">
                 <button 
-                  onClick={() => openModal && openModal('create_category', { domain_id: data.domain_id })}
+                  onClick={() => openModal && openModal('create_category', data.domain_id)}
                   className="flex items-center gap-2 text-xs font-medium text-blue-600 hover:text-blue-800 hover:bg-blue-50 py-1.5 px-2 w-full text-left rounded-lg transition-colors border border-dashed border-blue-200"
                 >
                   <Plus size={14} /> Create Category
@@ -100,7 +100,7 @@ export function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNod
             {type === 'folder' && data.folderType === 'document' && (
               <div className="relative mb-1">
                 <button 
-                  onClick={() => openModal && openModal('document_upload', { domain_id: data.domain_id })}
+                  onClick={() => openModal && openModal('bulk_upload_doc', null, data.domain)}
                   className="flex items-center gap-2 text-xs font-medium text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50 py-1.5 px-2 w-full text-left rounded-lg transition-colors border border-dashed border-emerald-200"
                 >
                   <UploadCloud size={14} /> Upload Document
