@@ -42,19 +42,19 @@ class OllamaService:
                 "stream": False,
                 "think": False,
                 "options": {
-                    "num_ctx": 8192,
-                    "temperature": 0.2,
-                    "top_p": 0.9,
-                    "repeat_penalty": 1.1,
-                    "num_predict": 192,
-                    "seed": 42,
-                    "stop": [
-                        "\nUser:",
-                        "\nQuestion:",
-                        "\nHuman:",
-                        "\nAssistant:"
-                    ]
-                }
+    "num_ctx": 8192,
+    "temperature": 0.05,
+    "top_p": 0.8,
+    "repeat_penalty": 1.15,
+    "num_predict": 128,
+    "seed": 42,
+    "stop": [
+        "\nUser:",
+        "\nQuestion:",
+        "\nHuman:",
+        "\nAssistant:"
+    ]
+}
             }
         )
 
@@ -111,13 +111,13 @@ class OllamaService:
                 "stream": False,
                 "think": False,
                 "options": {
-                    "num_ctx": 8192,
-                    "temperature": 0.1,
-                    "top_p": 0.9,
-                    "repeat_penalty": 1.05,
-                    "num_predict": 96,
-                    "seed": 42
-                }
+    "num_ctx": 4096,
+    "temperature": 0.0,
+    "top_p": 0.8,
+    "repeat_penalty": 1.05,
+    "num_predict": 64,
+    "seed": 42
+}
             }
         )
 
@@ -153,19 +153,19 @@ class OllamaService:
                 "stream": True,
                 "think": False,
                 "options": {
-                    "num_ctx": 8192,
-                    "temperature": 0.2,
-                    "top_p": 0.9,
-                    "repeat_penalty": 1.1,
-                    "num_predict": 192,
-                    "seed": 42,
-                    "stop": [
-                        "\nUser:",
-                        "\nQuestion:",
-                        "\nHuman:",
-                        "\nAssistant:"
-                    ]
-                }
+    "num_ctx": 8192,
+    "temperature": 0.05,
+    "top_p": 0.8,
+    "repeat_penalty": 1.15,
+    "num_predict": 128,
+    "seed": 42,
+    "stop": [
+        "\nUser:",
+        "\nQuestion:",
+        "\nHuman:",
+        "\nAssistant:"
+    ]
+}
             }
         ) as response:
 
