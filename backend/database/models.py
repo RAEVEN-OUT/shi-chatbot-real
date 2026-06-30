@@ -91,12 +91,13 @@ class FAQQuestion(Base):
     answer = Column(String, nullable=False)
     status = Column(String, default="active")
     aliases = Column(ARRAY(String), default=list, nullable=True)
+    display_order = Column(Integer, server_default="0", default=0, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     __table_args__ = (
         Index('ix_faq_questions_faq_id_status', 'faq_id', 'status'),
-        Index('ix_faq_questions_active_faq_id', 'faq_id', text('created_at DESC'), postgresql_where=text("status = 'active'")),
+        Index('ix_faq_questions_active_faq_id', 'faq_id', text('display_order ASC'), text('created_at DESC'), postgresql_where=text("status = 'active'")),
     )
     
     category = relationship("FAQCategory", back_populates="questions")

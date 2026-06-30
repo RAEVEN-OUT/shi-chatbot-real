@@ -114,6 +114,7 @@ async def bulk_upload_faq(
     errors: List[str] = []
     success_count = 0
     to_index: List[tuple] = []
+    category_max_order = {}
 
     # 2. Process rows
     for i, row in enumerate(rows, start=1):
@@ -198,11 +199,19 @@ async def bulk_upload_faq(
                 if question and answer:
                     q_key = (cat.id, question.lower())
                     if q_key not in question_cache:
+                        if cat.id not in category_max_order:
+                            max_stmt = select(func.max(FAQQuestion.display_order)).where(FAQQuestion.faq_id == cat.id)
+                            max_res = await db.execute(max_stmt)
+                            category_max_order[cat.id] = max_res.scalar() or 0
+                            
+                        category_max_order[cat.id] += 1
+                        
                         new_q = FAQQuestion(
                             faq_id=cat.id,
                             question=question,
                             answer=answer,
-                            status="active"
+                            status="active",
+                            display_order=category_max_order[cat.id]
                         )
                         db.add(new_q)
                         await db.flush()

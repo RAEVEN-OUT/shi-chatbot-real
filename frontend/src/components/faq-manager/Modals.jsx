@@ -273,11 +273,11 @@ export function CategoryForm({ formData, setFormData, onSubmit, saving, onCancel
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1.5">Category Title</label>
-        <input required type="text" maxLength={200} value={formData.faq_title} onChange={e => { setFormData({ ...formData, faq_title: e.target.value }); setFormErrors({}); }} className={`w-full bg-gray-50 border rounded-xl px-4 py-2 text-sm focus:outline-none ${formErrors.faq_title ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-purple-500'}`} />
+        <input required type="text" maxLength={200} value={formData.faq_title} onChange={e => { setFormData({ ...formData, faq_title: e.target.value }); setFormErrors({}); }} className={`w-full bg-gray-50 border rounded-xl px-4 py-2 text-sm focus:outline-none text-gray-900 ${formErrors.faq_title ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-purple-500'}`} />
         {formErrors.faq_title && <p className="text-red-500 text-xs mt-1">{formErrors.faq_title}</p>}
       </div>
       <div className="grid grid-cols-2 gap-4">
-        <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Status</label><select value={formData.status} onChange={e => setFormData({ ...formData, status: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-purple-500"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
+        <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Status</label><select value={formData.status} onChange={e => setFormData({ ...formData, status: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-purple-500 text-gray-900"><option value="active">Active</option><option value="inactive">Inactive</option></select></div>
       </div>
       <div className="flex justify-end gap-3 pt-4"><button type="button" onClick={onCancel} className="px-5 py-2 text-sm text-gray-700 hover:text-gray-900">Cancel</button><button type="submit" disabled={saving} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm">{saving ? 'Saving...' : submitText}</button></div>
     </form>

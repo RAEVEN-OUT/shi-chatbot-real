@@ -88,7 +88,7 @@ async def list_faq_questions(
     count_result = await db.execute(count_stmt)
     total_items = count_result.scalar() or 0
 
-    stmt = stmt.order_by(FAQQuestion.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    stmt = stmt.order_by(FAQQuestion.display_order.asc(), FAQQuestion.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     q_result = await db.execute(stmt)
     questions = q_result.scalars().all()
 
@@ -132,12 +132,17 @@ async def create_faq_question(
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
 
+    max_stmt = select(func.max(FAQQuestion.display_order)).where(FAQQuestion.faq_id == data.faq_id)
+    max_res = await db.execute(max_stmt)
+    max_order = max_res.scalar() or 0
+
     new_q = FAQQuestion(
         faq_id=data.faq_id,
         question=data.question,
         answer=data.answer,
         aliases=data.aliases,
-        status="active"
+        status="active",
+        display_order=max_order + 1
     )
     db.add(new_q)
     await db.commit()
