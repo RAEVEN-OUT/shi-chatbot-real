@@ -75,8 +75,7 @@ export default function Conversations() {
     if (!currentUser) return;
 
     const baseUrl = process.env.NEXT_PUBLIC_WITHOUT_API_URL
-      || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '')
-      || 'http://127.0.0.1:8005';
+      || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '');
     const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/ws/admin/dashboard';
 
     const ws = new WebSocket(wsUrl);
@@ -143,8 +142,7 @@ export default function Conversations() {
 
     const connectSessionWs = () => {
       const baseUrl = process.env.NEXT_PUBLIC_WITHOUT_API_URL
-        || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '')
-        || 'http://127.0.0.1:8005';
+        || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '');
       const wsUrl = baseUrl.replace(/^http/, 'ws') + `/api/ws/admin/chat/${selectedSessionId}`;
 
       const ws = new WebSocket(wsUrl);

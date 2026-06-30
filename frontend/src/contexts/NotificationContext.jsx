@@ -42,7 +42,6 @@ export function NotificationProvider({ children }) {
     const baseUrl = (
       process.env.NEXT_PUBLIC_WITHOUT_API_URL
       || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '')
-      || 'http://127.0.0.1:8005'
     ).trim();
 
     const wsUrl = baseUrl.replace(/^http/, 'ws') + '/api/ws/admin/dashboard';
