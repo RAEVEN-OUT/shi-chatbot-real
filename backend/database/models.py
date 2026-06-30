@@ -46,17 +46,24 @@ class Domain(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     organization = relationship("Organization", back_populates="domains")
+    faqs = relationship("FAQ", back_populates="domain", cascade="all, delete", passive_deletes=True)
+    domain_categories = relationship("DomainCategory", back_populates="domain", cascade="all, delete", passive_deletes=True)
+    chat_sessions = relationship("ChatSession", back_populates="domain", cascade="all, delete", passive_deletes=True)
+    leads = relationship("Lead", back_populates="domain", cascade="all, delete", passive_deletes=True)
+    retraining_jobs = relationship("RetrainingJob", back_populates="domain", cascade="all, delete", passive_deletes=True)
+    failed_questions = relationship("FailedQuestion", back_populates="domain", cascade="all, delete", passive_deletes=True)
+    document_sources = relationship("DocumentSource", back_populates="domain", cascade="all, delete", passive_deletes=True)
 
 class FAQ(Base):
     __tablename__ = "faqs"
     
     id = Column(String, primary_key=True, default=generate_uuid)
-    domain_id = Column(String, ForeignKey("domains.id"))
+    domain_id = Column(String, ForeignKey("domains.id", ondelete="CASCADE"))
     question = Column(String)
     answer = Column(String)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    domain = relationship("Domain")
+    domain = relationship("Domain", back_populates="faqs")
 
 class FAQCategory(Base):
     __tablename__ = "faq_categories"
@@ -97,18 +104,18 @@ class FAQQuestion(Base):
 class DomainCategory(Base):
     __tablename__ = "domain_categories"
     
-    domain_id = Column(String, ForeignKey("domains.id"), primary_key=True, index=True)
+    domain_id = Column(String, ForeignKey("domains.id", ondelete="CASCADE"), primary_key=True, index=True)
     category_id = Column(String, ForeignKey("faq_categories.id"), primary_key=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    domain = relationship("Domain")
+    domain = relationship("Domain", back_populates="domain_categories")
     category = relationship("FAQCategory")
 
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
     
     id = Column(String, primary_key=True, default=generate_uuid)
-    domain_id = Column(String, ForeignKey("domains.id"), index=True)
+    domain_id = Column(String, ForeignKey("domains.id", ondelete="CASCADE"), index=True)
     customer_name = Column(String, nullable=True)
     customer_email = Column(String, nullable=True)
     status = Column(String, default="open") # open, closed
@@ -129,14 +136,14 @@ class ChatSession(Base):
         Index('ix_chat_sessions_open_unread', 'domain_id', 'unread_admin', postgresql_where=text("status = 'open'")),
     )
     
-    domain = relationship("Domain")
-    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
+    domain = relationship("Domain", back_populates="chat_sessions")
+    messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan", passive_deletes=True)
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
     
     id = Column(String, primary_key=True, default=generate_uuid)
-    session_id = Column(String, ForeignKey("chat_sessions.id"), index=True)
+    session_id = Column(String, ForeignKey("chat_sessions.id", ondelete="CASCADE"), index=True)
     sender = Column(String) # user, bot, admin
     message = Column(String)
     type = Column(String, default="text") # text, system
@@ -155,7 +162,7 @@ class Lead(Base):
     __tablename__ = "leads"
     
     id = Column(String, primary_key=True, default=generate_uuid)
-    domain_id = Column(String, ForeignKey("domains.id"), index=True)
+    domain_id = Column(String, ForeignKey("domains.id", ondelete="CASCADE"), index=True)
     session_id = Column(String, nullable=True)
     name = Column(String, nullable=True)
     email = Column(String, nullable=True)
@@ -163,23 +170,23 @@ class Lead(Base):
     message = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    domain = relationship("Domain")
+    domain = relationship("Domain", back_populates="leads")
 
 class RetrainingJob(Base):
     __tablename__ = "retraining_jobs"
     
     id = Column(String, primary_key=True, default=generate_uuid)
-    domain_id = Column(String, ForeignKey("domains.id"))
+    domain_id = Column(String, ForeignKey("domains.id", ondelete="CASCADE"))
     status = Column(String, default="pending") # pending, processing, completed, failed
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
-    domain = relationship("Domain")
+    domain = relationship("Domain", back_populates="retraining_jobs")
 
 class FailedQuestion(Base):
     __tablename__ = "failed_questions"
     
     id = Column(String, primary_key=True, default=generate_uuid)
-    domain_id = Column(String, ForeignKey("domains.id"), index=True)
+    domain_id = Column(String, ForeignKey("domains.id", ondelete="CASCADE"), index=True)
     question = Column(String)
     ai_response = Column(String, nullable=True)
     failure_reason = Column(String) # NO_MATCH, LOW_CONFIDENCE, LLM_FAILURE, SPAM
@@ -192,7 +199,7 @@ class FailedQuestion(Base):
         Index('ix_failed_questions_spam', 'domain_id', text('spam_count DESC'), postgresql_where=text("is_spam = true")),
     )
     
-    domain = relationship("Domain")
+    domain = relationship("Domain", back_populates="failed_questions")
 
 
 class DocumentSource(Base):
@@ -201,7 +208,7 @@ class DocumentSource(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     organization_id = Column(String, ForeignKey("organizations.id"), index=True, nullable=False)
-    domain_id = Column(String, ForeignKey("domains.id"), index=True, nullable=True)
+    domain_id = Column(String, ForeignKey("domains.id", ondelete="CASCADE"), index=True, nullable=True)
     source_title = Column(String, nullable=False)
     filename = Column(String, nullable=False)
     file_type = Column(String, nullable=False)         # pdf | txt | docx
@@ -219,4 +226,4 @@ class DocumentSource(Base):
     )
 
     organization = relationship("Organization")
-    domain = relationship("Domain")
+    domain = relationship("Domain", back_populates="document_sources")
