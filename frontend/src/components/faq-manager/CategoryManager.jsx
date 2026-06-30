@@ -21,7 +21,12 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
   const { showToast } = useToast();
   const [selectedQuestions, setSelectedQuestions] = useState(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
-  
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(category.active_question_count || qs.length);
+  const [isLoadingFAQs, setIsLoadingFAQs] = useState(false);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
   // State for Edit Category
   const [editFormData, setEditFormData] = useState({ faq_title: category?.faq_title||'', status: category?.status||'active' });
   const [editing, setEditing] = useState(false);
@@ -33,14 +38,36 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
 
   useEffect(() => {
     setEditFormData({ faq_title: category?.faq_title||'', status: category?.status||'active' });
-  }, [category]);
+    setPage(1); // Reset page when category changes
+  }, [category.id]);
   
   useEffect(() => {
     setActiveTab(initialTab || 'assignments');
   }, [initialTab, category.id]);
+
+  useEffect(() => {
+    const fetchFAQs = async () => {
+      setIsLoadingFAQs(true);
+      try {
+        const res = await api.get(`/faq-questions?faq_id=${category.id}&page=${page}&page_size=10`);
+        setCategories(prev => prev.map(c => c.id === category.id ? { ...c, questions: res.data.data, questionsLoaded: true } : c));
+        if (res.data.pagination) {
+          setTotalPages(res.data.pagination.total_pages);
+          setTotalItems(res.data.pagination.total_items);
+        }
+      } catch (e) {
+        console.error('Failed to load FAQs:', e);
+      } finally {
+        setIsLoadingFAQs(false);
+      }
+    };
+    if (activeTab === 'assignments') {
+      fetchFAQs();
+    }
+  }, [category.id, page, activeTab, setCategories, refreshTrigger]);
   
   const tabs = [
-    { id: 'assignments', label: `FAQs (${qs.length})`, icon: MessageCircle },
+    { id: 'assignments', label: `FAQs (${totalItems})`, icon: MessageCircle },
     { id: 'create', label: 'Create FAQ', icon: Plus }
   ];
 
@@ -78,10 +105,16 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
       };
       const res = await api.post('/faq-questions', payload);
       const newQ = res.data.question || res.data;
-      setCategories(prev => prev.map(c => c.id === category.id ? { ...c, questions: [newQ, ...(c.questions || [])], questionsLoaded: true } : c));
+      setCategories(prev => prev.map(c => c.id === category.id ? { 
+        ...c, 
+        questions: [newQ, ...(c.questions || [])], 
+        questionsLoaded: true,
+        active_question_count: (c.active_question_count ?? 0) + (newQ.status === 'active' ? 1 : 0)
+      } : c));
       showToast('Question created', 'success');
       setCreateQuestionData({ question: '', answer: '', aliases: '', status: 'active' });
       setActiveTab('assignments');
+      setRefreshTrigger(prev => prev + 1); // trigger refresh
     } catch (e) {
       const errData = e.response?.data;
       const errorMsg = errData?.message || errData?.detail?.message || errData?.detail || 'Error creating question';
@@ -98,17 +131,25 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
     setIsBulkDeleting(true);
     try {
       const res = await api.post('/faq-questions/bulk-delete', { ids: Array.from(selectedQuestions) });
-      const newQs = qs.filter(q => !selectedQuestions.has(q.id));
-      setCategories(prev => prev.map(c => c.id === category.id ? { ...c, questions: newQs } : c));
-      setSelectedQuestions(new Set());
-      if (res.data?.details && res.data.details.failed && res.data.details.failed.length > 0) {
-        if (res.data.details.success && res.data.details.success.length > 0) {
-          showToast(res.data.message, 'warning');
-        } else {
-          showToast(res.data.details.failed[0].error || res.data.message || 'Failed to delete FAQs', 'error');
+      const deletedIds = selectedQuestions;
+      
+      setCategories(prev => prev.map(c => {
+        if (c.id === category.id) {
+          const deletedActiveCount = (c.questions || []).filter(q => deletedIds.has(q.id) && q.status === 'active').length;
+          return {
+            ...c,
+            questions: (c.questions || []).filter(q => !deletedIds.has(q.id)),
+            active_question_count: Math.max(0, (c.active_question_count ?? 0) - deletedActiveCount)
+          };
         }
+        return c;
+      }));
+      setSelectedQuestions(new Set());
+      if (res.data?.status === 'success') {
+        showToast(res.data.message || `Deleted ${res.data.deleted_count} FAQs successfully`, 'success');
+        setRefreshTrigger(prev => prev + 1);
       } else {
-        showToast(res.data?.message || 'FAQs deleted successfully', 'success');
+        showToast('Failed to delete FAQs', 'error');
       }
     } catch (e) {
       showToast(e.response?.data?.detail || e.response?.data?.message || 'Error deleting FAQs', 'error');
@@ -148,7 +189,7 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
                 )}
               </div>
             </div>
-            {!category.questionsLoaded ? <div className="text-sm text-gray-500 p-5 bg-white rounded-xl border border-gray-200">Expand this category in the tree view to load its FAQs.</div> : 
+            {!category.questionsLoaded || isLoadingFAQs ? <div className="text-sm text-gray-500 p-5 bg-white rounded-xl border border-gray-200 flex items-center gap-2"><RefreshCw size={16} className="animate-spin text-gray-400" /> Loading FAQs...</div> : 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {qs.length === 0 ? <p className="text-sm text-gray-500 italic col-span-2 p-4 text-center bg-white rounded-xl border border-gray-200">No questions found.</p> : 
                   qs.map(q => (
@@ -167,7 +208,7 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
                           <button onClick={(e) => { e.stopPropagation(); selectNode('question', q.id, q, 'edit'); }} className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded transition-colors" title="Edit FAQ">
                             <Edit3 size={16} />
                           </button>
-                          <button onClick={(e) => { e.stopPropagation(); handleDeleteNode('question', q.id); }} disabled={deletingId === q.id} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-50" title="Delete FAQ">
+                          <button onClick={async (e) => { e.stopPropagation(); await handleDeleteNode('question', q.id); setRefreshTrigger(prev => prev + 1); }} disabled={deletingId === q.id} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-50" title="Delete FAQ">
                             {deletingId === q.id ? <RefreshCw size={16} className="animate-spin text-red-500" /> : <Trash2 size={16} className={deletingId === q.id ? "" : "hover:text-red-500"} />}
                           </button>
                         </div>
@@ -181,6 +222,15 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
                 }
               </div>
             }
+            {totalPages > 1 && !isLoadingFAQs && (
+              <div className="mt-6 flex justify-between items-center bg-white p-3 border border-gray-200 rounded-xl">
+                <div className="flex gap-2">
+                  <button disabled={page === 1} onClick={() => setPage(p => p - 1)} className="px-3 py-1.5 text-xs font-bold rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors text-gray-700 bg-white">Previous</button>
+                  <span className="px-3 py-1.5 text-xs text-gray-600 font-medium bg-white">Page {page} of {totalPages}</span>
+                  <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="px-3 py-1.5 text-xs font-bold rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors text-gray-700 bg-white">Next</button>
+                </div>
+              </div>
+            )}
           </div>
         )}
         

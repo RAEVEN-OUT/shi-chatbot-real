@@ -68,10 +68,19 @@ export function QuestionManager({ deletingId, question, customTimeStamp, categor
       await api.put(`/faq-questions/${question.id}`, payload);
       const updatedQuestion = { ...question, ...payload };
       
-      setCategories(prev => prev.map(c => ({ 
-        ...c, 
-        questions: c.questions?.map(q => q.id === question.id ? updatedQuestion : q) 
-      })));
+      setCategories(prev => prev.map(c => {
+        let diff = 0;
+        const oldQ = c.questions?.find(q => q.id === question.id);
+        if (oldQ) {
+          if (oldQ.status === 'active' && updatedQuestion.status !== 'active') diff = -1;
+          if (oldQ.status !== 'active' && updatedQuestion.status === 'active') diff = 1;
+        }
+        return { 
+          ...c, 
+          questions: c.questions?.map(q => q.id === question.id ? updatedQuestion : q),
+          active_question_count: Math.max(0, (c.active_question_count ?? 0) + diff)
+        };
+      }));
       
       selectNode('question', question.id, updatedQuestion);
       showToast('FAQ updated & vector re-indexed', 'success');
@@ -125,7 +134,7 @@ export function QuestionManager({ deletingId, question, customTimeStamp, categor
                 <span>Updated: {formatDate(question.updated_at || Date.now(), customTimeStamp)}</span>
               </div>
               <div className="flex gap-3">
-                <button type="button" onClick={() => setFormData({ question: question.question || '', answer: question.answer || '', aliases: (question.aliases || []).join(', '), status: question.status || 'active' })} className="px-5 py-2.5 text-sm text-gray-700 hover:text-gray-900">Cancel</button>
+                <button type="button" onClick={() => { const parentCat = categories?.find(c => c.id === question.faq_id); if (parentCat) selectNode('category', parentCat.id, parentCat); else selectNode(null); }} className="px-5 py-2.5 text-sm text-gray-700 hover:text-gray-900">Cancel</button>
                 <button type="submit" disabled={saving} className="px-8 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-amber-600/20 transition-all flex items-center gap-2">
                   {saving ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} {saving ? 'Saving...' : 'Save Changes'}
                 </button>

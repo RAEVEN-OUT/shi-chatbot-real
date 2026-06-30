@@ -43,7 +43,7 @@ export function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNod
   else if (type === 'category') { 
     childType = 'question'; 
     children = data.questions || []; 
-    count = children.length;
+    count = data.active_question_count ?? children.length;
   }
 
   let childTypeDisplay = '';
@@ -52,7 +52,9 @@ export function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNod
   else if (childType === 'document') childTypeDisplay = count === 1 ? 'document' : 'documents';
   else childTypeDisplay = count === 1 ? 'question' : 'questions';
 
-  const hasChildren = type !== 'question' && type !== 'document';
+  const isExpandable = type !== 'question' && type !== 'document' && type !== 'category';
+  const showCount = type !== 'question' && type !== 'document';
+  
   const getIcon = () => {
     if(type === 'domain') {
       if (scopedDomainId) return null;
@@ -73,17 +75,17 @@ export function TreeNode({ type, data, nodePath, depth, expandedNodes, toggleNod
           ${isSelected ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50/50 border border-transparent'}
         `}
       >
-        <div className={`w-5 h-5 flex items-center justify-center mr-1 shrink-0 ${hasChildren ? 'cursor-pointer hover:bg-gray-100 rounded' : ''}`} onClick={(e) => { e.stopPropagation(); if (hasChildren) { toggleNode(nodePath, type, data.id); selectNode(type, data.id, data); } }}>
-          {isLoading ? <RefreshCw className="h-3 w-3 animate-spin text-gray-500" /> : hasChildren ? (isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-gray-500" /> : <ChevronRight className="h-3.5 w-3.5 text-gray-500" />) : <span className="w-3.5 h-3.5" />}
+        <div className={`w-5 h-5 flex items-center justify-center mr-1 shrink-0 ${isExpandable ? 'cursor-pointer hover:bg-gray-100 rounded' : ''}`} onClick={(e) => { e.stopPropagation(); if (isExpandable) { toggleNode(nodePath, type, data.id); selectNode(type, data.id, data); } }}>
+          {isLoading ? <RefreshCw className="h-3 w-3 animate-spin text-gray-500" /> : isExpandable ? (isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-gray-500" /> : <ChevronRight className="h-3.5 w-3.5 text-gray-500" />) : <span className="w-3.5 h-3.5" />}
         </div>
-        <div className="flex flex-1 items-center gap-2 truncate" onClick={() => {selectNode(type, data.id, data); if (hasChildren && !isExpanded) toggleNode(nodePath, type, data.id);}}>  
+        <div className="flex flex-1 items-center gap-2 truncate" onClick={() => {selectNode(type, data.id, data); if (isExpandable && !isExpanded) toggleNode(nodePath, type, data.id);}}>  
           {getIcon()}
           <span title={title} className={`truncate text-sm ${isSelected ? 'text-blue-700 font-bold' : 'text-gray-700'}`}>{title}</span>
-          {hasChildren && <span className="text-[10px] text-gray-500 ml-auto mr-1 bg-gray-50 px-1.5 py-0.5 rounded shrink-0">{count} {childTypeDisplay}</span>}
+          {showCount && <span className="text-[10px] text-gray-500 ml-auto mr-1 bg-gray-50 px-1.5 py-0.5 rounded shrink-0">{count} {childTypeDisplay}</span>}
         </div>
       </div>
       
-      {isExpanded && hasChildren && (
+      {isExpanded && isExpandable && (
         <div className="relative mt-1">
           <div className="absolute left-4 top-0 bottom-0 w-px bg-gray-100/50 -z-10"></div>
           <div className="pl-6 space-y-0.5 pb-1">

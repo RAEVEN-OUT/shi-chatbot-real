@@ -152,11 +152,22 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
   };
 
   // Re-fetch selected node data to ensure details view is fresh
-  const selectNode = (type, id, data, tab = null) => {
+  const selectNode = async (type, id, data, tab = null) => {
     if (!type) {
       setSelectedNode(null);
     } else {
       setSelectedNode({ type, id, data, initialTab: tab });
+      if (type === 'category' && !categories.find(c => c.id === id)?.questionsLoaded) {
+        setLoadingNode(prev => ({ ...prev, [`c_${id}`]: true }));
+        try {
+          const res = await api.get(`/faq-questions?faq_id=${id}`);
+          setCategories(prev => prev.map(c => c.id === id ? { ...c, questions: res.data.data, questionsLoaded: true } : c));
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setLoadingNode(prev => ({ ...prev, [`c_${id}`]: false }));
+        }
+      }
     }
   };
 
@@ -178,7 +189,14 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
         setCategories(prev => prev.filter(c => c.id !== id));
       } else if (type === 'question') {
         await api.delete(`/faq-questions/${id}`);
-        setCategories(prev => prev.map(c => ({ ...c, questions: c.questions?.filter(q => q.id !== id) })));
+        setCategories(prev => prev.map(c => {
+          const wasActive = c.questions?.find(q => q.id === id)?.status === 'active';
+          return {
+            ...c,
+            questions: c.questions?.filter(q => q.id !== id),
+            active_question_count: Math.max(0, (c.active_question_count ?? 0) - (wasActive ? 1 : 0))
+          };
+        }));
       }
       if (selectedNode?.id === id) setSelectedNode(null);
       showToast(`${type.charAt(0).toUpperCase() + type.slice(1)} deleted successfully`, 'success');

@@ -40,6 +40,7 @@ class OllamaService:
                     }
                 ],
                 "stream": False,
+                "think": False,
                 "options": {
                     "num_ctx": 8192,
                     "temperature": 0.2,
@@ -108,6 +109,7 @@ class OllamaService:
                     }
                 ],
                 "stream": False,
+                "think": False,
                 "options": {
                     "num_ctx": 8192,
                     "temperature": 0.1,
@@ -149,6 +151,7 @@ class OllamaService:
                     }
                 ],
                 "stream": True,
+                "think": False,
                 "options": {
                     "num_ctx": 8192,
                     "temperature": 0.2,
