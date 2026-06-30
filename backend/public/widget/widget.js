@@ -186,7 +186,7 @@
     <div id="chatbot-input-area">
       <input type="text" id="chatbot-input" placeholder="Type your question..." autocomplete="off" disabled />
       <button id="chatbot-send" disabled>
-        <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path></svg>
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path></svg>
       </button>
     </div>
   `;

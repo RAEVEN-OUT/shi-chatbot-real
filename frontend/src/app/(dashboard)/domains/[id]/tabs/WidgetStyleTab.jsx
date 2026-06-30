@@ -13,7 +13,7 @@ export default function WidgetStyleTab({ domain }) {
     theme_color: '#3B82F6',
     title: 'Support Chat',
     placeholder: 'Type your question...',
-    welcome_message: '',
+    welcome_message: domain.welcome_message || domain.widget_welcome_message || 'Welcome,how may I help you?',
     font_color: '#ffffff',
     bot_name: '',
     bot_description: '',
@@ -29,7 +29,7 @@ export default function WidgetStyleTab({ domain }) {
             theme_color: data.theme_color || '#3B82F6',
             title: data.title || 'Support Chat',
             placeholder: data.placeholder || 'Type your question...',
-            welcome_message: data.welcome_message || '',
+            welcome_message: data.welcome_message || domain.welcome_message || domain.widget_welcome_message || 'Welcome,how may I help you?',
             font_color: data.font_color || '#ffffff',
             bot_name: data.bot_name || data.botName || '',
             bot_description: data.bot_description || '',
@@ -135,19 +135,6 @@ export default function WidgetStyleTab({ domain }) {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Border Radius</label>
-              <select 
-                value={config.border_radius} 
-                onChange={e => setConfig({...config, border_radius: e.target.value})} 
-                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none appearance-none"
-              >
-                <option value="0px">Square (0px)</option>
-                <option value="8px">Rounded Soft (8px)</option>
-                <option value="12px">Rounded Medium (12px)</option>
-                <option value="20px">Rounded Pill (20px)</option>
-              </select>
-            </div>
           </div>
           
           <div className="space-y-2">
@@ -196,7 +183,7 @@ export default function WidgetStyleTab({ domain }) {
                 value={config.welcome_message} 
                 onChange={e => setConfig({...config, welcome_message: e.target.value})} 
                 className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none" 
-                placeholder="Welcome! How can we help you?" 
+                placeholder="Welcome,how may I help you?" 
               />
             </div>
 
@@ -265,7 +252,7 @@ export default function WidgetStyleTab({ domain }) {
               <div className="bg-gray-50 border border-gray-200 rounded-full flex items-center p-1 pl-4">
                 <input type="text" placeholder={config.placeholder} className="flex-1 bg-transparent border-none outline-none text-sm text-gray-800" disabled />
                 <div className="w-8 h-8 rounded-full flex items-center justify-center ml-2" style={{ backgroundColor: config.theme_color, color: config.font_color }}>
-                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                   <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
                 </div>
               </div>
             </div>
