@@ -22,26 +22,35 @@ class FAQCategoryUpdate(BaseModel):
 class BulkDeleteRequest(BaseModel):
     category_ids: List[str]
 
+from sqlalchemy import func
+
 @router.get("")
 async def list_faq_categories(
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(FAQCategory).where(
+    stmt = select(
+        FAQCategory,
+        func.count(FAQQuestion.id).filter(FAQQuestion.status == 'active').label("active_questions")
+    ).outerjoin(
+        FAQQuestion, FAQCategory.id == FAQQuestion.faq_id
+    ).where(
         FAQCategory.organization_id == user["postgres_user"].organization_id,
-        FAQCategory.status != "deleted" # soft delete status check
-    )
+        FAQCategory.status != "deleted"
+    ).group_by(FAQCategory.id)
+
     result = await db.execute(stmt)
-    categories = result.scalars().all()
+    categories = result.all()
     
     return [
         {
-            "id": c.id,
-            "faq_title": c.faq_title,
-            "status": c.status,
-            "created_at": c.created_at
+            "id": row.FAQCategory.id,
+            "faq_title": row.FAQCategory.faq_title,
+            "status": row.FAQCategory.status,
+            "created_at": row.FAQCategory.created_at,
+            "active_question_count": row.active_questions
         }
-        for c in categories
+        for row in categories
     ]
 
 @router.post("")

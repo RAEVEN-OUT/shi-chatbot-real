@@ -712,7 +712,6 @@ export default function Faqs() {
                       </tr>
                     ) : (
                       categories.map(cat => {
-                        const activeQsCount = items.filter(i => i.faq_id === cat.id && i.status === 'active').length;
                         const isInactive = cat.status === 'inactive';
                         return (
                           <tr key={cat.id} className={`hover:bg-gray-50 transition-colors ${isInactive ? 'opacity-50' : ''}`}>
@@ -744,7 +743,7 @@ export default function Faqs() {
                               </span>
                             </td>
                             <td className="px-5 py-4 align-middle text-center font-semibold text-gray-700 text-xs">
-                              {activeQsCount}
+                              {cat.active_question_count ?? 0}
                             </td>
                             <td className="px-5 py-4 align-middle text-right">
                               <div className="flex gap-1 justify-end">
