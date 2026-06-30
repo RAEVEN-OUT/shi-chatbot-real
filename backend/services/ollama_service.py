@@ -1,7 +1,10 @@
 import json
 import httpx
+import logging
+import asyncio
 from core.config import settings
 
+logger = logging.getLogger("ollama_service")
 
 class OllamaService:
     def __init__(self):
@@ -10,58 +13,81 @@ class OllamaService:
         self.embedding_model = settings.OLLAMA_EMBEDDING_MODEL
         self.client = httpx.AsyncClient(timeout=60.0)
 
+    async def check_health(self) -> bool:
+        """Check if Ollama is available."""
+        try:
+            response = await self.client.get(f"{self.base_url}/api/tags", timeout=5.0)
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Ollama health check failed: {e}")
+            return False
+
     async def generate_embedding(self, text: str) -> list[float]:
         """Generate embedding using the configured embedding model."""
-        response = await self.client.post(
-            f"{self.base_url}/api/embeddings",
-            json={
-                "model": self.embedding_model,
-                "prompt": text
-            }
-        )
-        response.raise_for_status()
-        return response.json().get("embedding", [])
+        for attempt in range(2):
+            try:
+                response = await self.client.post(
+                    f"{self.base_url}/api/embeddings",
+                    json={
+                        "model": self.embedding_model,
+                        "prompt": text
+                    }
+                )
+                response.raise_for_status()
+                return response.json().get("embedding", [])
+            except (httpx.TimeoutException, httpx.RequestError) as e:
+                if attempt == 1:
+                    logger.error(f"Ollama embedding failed after retries: {e}")
+                    raise
+                await asyncio.sleep(1.0)
+        return []
 
     async def generate_response(self, system_prompt: str, user_query: str) -> str:
         """Generate a non-streaming response using the configured LLM."""
-
-        response = await self.client.post(
-            f"{self.base_url}/api/chat",
-            json={
-                "model": self.llm_model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": user_query
+        for attempt in range(2):
+            try:
+                response = await self.client.post(
+                    f"{self.base_url}/api/chat",
+                    json={
+                        "model": self.llm_model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": system_prompt
+                            },
+                            {
+                                "role": "user",
+                                "content": user_query
+                            }
+                        ],
+                        "stream": False,
+                        "think": False,
+                        "options": {
+            "num_ctx": 8192,
+            "temperature": 0.05,
+            "top_p": 0.8,
+            "repeat_penalty": 1.15,
+            "num_predict": 128,
+            "seed": 42,
+            "stop": [
+                "\nUser:",
+                "\nQuestion:",
+                "\nHuman:",
+                "\nAssistant:"
+            ]
+        }
                     }
-                ],
-                "stream": False,
-                "think": False,
-                "options": {
-    "num_ctx": 8192,
-    "temperature": 0.05,
-    "top_p": 0.8,
-    "repeat_penalty": 1.15,
-    "num_predict": 128,
-    "seed": 42,
-    "stop": [
-        "\nUser:",
-        "\nQuestion:",
-        "\nHuman:",
-        "\nAssistant:"
-    ]
-}
-            }
-        )
+                )
 
-        response.raise_for_status()
-
-        data = response.json()
-        return data.get("message", {}).get("content", "").strip()
+                response.raise_for_status()
+                data = response.json()
+                return data.get("message", {}).get("content", "").strip()
+            except (httpx.TimeoutException, httpx.RequestError) as e:
+                if attempt == 1:
+                    logger.error(f"Ollama generation failed after retries: {e}")
+                    raise
+                await asyncio.sleep(1.0)
+        return ""
 
     async def rewrite_query(
         self,
@@ -94,37 +120,44 @@ class OllamaService:
             f"{current_query}"
         )
 
-        response = await self.client.post(
-            f"{self.base_url}/api/chat",
-            json={
-                "model": self.llm_model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
+        for attempt in range(2):
+            try:
+                response = await self.client.post(
+                    f"{self.base_url}/api/chat",
+                    json={
+                        "model": self.llm_model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": system_prompt
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "stream": False,
+                        "think": False,
+                        "options": {
+            "num_ctx": 4096,
+            "temperature": 0.0,
+            "top_p": 0.8,
+            "repeat_penalty": 1.05,
+            "num_predict": 64,
+            "seed": 42
+        }
                     }
-                ],
-                "stream": False,
-                "think": False,
-                "options": {
-    "num_ctx": 4096,
-    "temperature": 0.0,
-    "top_p": 0.8,
-    "repeat_penalty": 1.05,
-    "num_predict": 64,
-    "seed": 42
-}
-            }
-        )
+                )
 
-        response.raise_for_status()
-
-        data = response.json()
-        return data.get("message", {}).get("content", current_query).strip()
+                response.raise_for_status()
+                data = response.json()
+                return data.get("message", {}).get("content", current_query).strip()
+            except (httpx.TimeoutException, httpx.RequestError) as e:
+                if attempt == 1:
+                    logger.warning(f"Ollama rewrite failed after retries: {e}. Falling back to original query.")
+                    return current_query
+                await asyncio.sleep(0.5)
+        return current_query
 
     async def generate_response_stream(
         self,
@@ -134,52 +167,59 @@ class OllamaService:
         """
         Generate a streaming response using the configured LLM.
         """
-
-        async with self.client.stream(
-            "POST",
-            f"{self.base_url}/api/chat",
-            json={
-                "model": self.llm_model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": user_query
+        for attempt in range(2):
+            try:
+                async with self.client.stream(
+                    "POST",
+                    f"{self.base_url}/api/chat",
+                    json={
+                        "model": self.llm_model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": system_prompt
+                            },
+                            {
+                                "role": "user",
+                                "content": user_query
+                            }
+                        ],
+                        "stream": True,
+                        "think": False,
+                        "options": {
+            "num_ctx": 8192,
+            "temperature": 0.05,
+            "top_p": 0.8,
+            "repeat_penalty": 1.15,
+            "num_predict": 128,
+            "seed": 42,
+            "stop": [
+                "\nUser:",
+                "\nQuestion:",
+                "\nHuman:",
+                "\nAssistant:"
+            ]
+        }
                     }
-                ],
-                "stream": True,
-                "think": False,
-                "options": {
-    "num_ctx": 8192,
-    "temperature": 0.05,
-    "top_p": 0.8,
-    "repeat_penalty": 1.15,
-    "num_predict": 128,
-    "seed": 42,
-    "stop": [
-        "\nUser:",
-        "\nQuestion:",
-        "\nHuman:",
-        "\nAssistant:"
-    ]
-}
-            }
-        ) as response:
+                ) as response:
 
-            response.raise_for_status()
+                    response.raise_for_status()
 
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
 
-                try:
-                    chunk = json.loads(line)
-                    yield chunk.get("message", {}).get("content", "")
-                except Exception as e:
-                    print(f"Error parsing Ollama stream chunk: {e}")
+                        try:
+                            chunk = json.loads(line)
+                            yield chunk.get("message", {}).get("content", "")
+                        except Exception as e:
+                            logger.error(f"Error parsing Ollama stream chunk: {e}")
+                break # successfully streamed
+            except (httpx.TimeoutException, httpx.RequestError) as e:
+                if attempt == 1:
+                    logger.error(f"Ollama stream failed after retries: {e}")
+                    raise
+                await asyncio.sleep(1.0)
 
 
 ollama_service = OllamaService()

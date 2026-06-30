@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 from contextlib import asynccontextmanager
@@ -90,8 +90,51 @@ if os.path.exists(public_dir):
     app.mount("/public", StaticFiles(directory=public_dir), name="public")
 
 @app.get("/healthz")
-async def health_check():
-    return {"status": "ok", "message": "FastAPI is running successfully"}
+async def health_check(response: Response):
+    import asyncio
+    from services.redis_service import redis_service
+    from services.qdrant_service import qdrant_service
+    from services.ollama_service import ollama_service
+    from database.database import AsyncSessionLocal
+    from sqlalchemy import text
+    
+    health_status = {
+        "status": "ok",
+        "services": {
+            "api": "up",
+            "postgres": "down",
+            "redis": "down",
+            "qdrant": "down",
+            "ollama": "down"
+        }
+    }
+    
+    # Check Postgres
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+            health_status["services"]["postgres"] = "up"
+    except Exception as e:
+        logger.error(f"Postgres health check failed: {e}")
+
+    # Check external services concurrently
+    redis_up, qdrant_up, ollama_up = await asyncio.gather(
+        redis_service.check_health(),
+        qdrant_service.check_health(),
+        ollama_service.check_health()
+    )
+    
+    health_status["services"]["redis"] = "up" if redis_up else "down"
+    health_status["services"]["qdrant"] = "up" if qdrant_up else "down"
+    health_status["services"]["ollama"] = "up" if ollama_up else "down"
+    
+    if not (health_status["services"]["postgres"] == "up" and 
+            health_status["services"]["qdrant"] == "up" and 
+            health_status["services"]["ollama"] == "up"):
+        health_status["status"] = "degraded"
+        response.status_code = 503
+        
+    return health_status
 
 if __name__ == "__main__":
     import uvicorn

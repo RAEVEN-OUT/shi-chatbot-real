@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
@@ -12,6 +12,7 @@ from database.models import FAQQuestion, FAQCategory, DomainCategory
 from services.ollama_service import ollama_service
 from services.qdrant_service import qdrant_service
 from services.audit_service import log_action
+from services.redis_service import redis_service
 
 router = APIRouter(prefix="/api/faq-questions", tags=["faq_questions"])
 
@@ -43,6 +44,14 @@ def _build_embed_text(question: str, answer: str, aliases: Optional[List[str]] =
     if aliases:
         text += f"\nAliases: {', '.join(aliases)}"
     return text
+
+
+async def invalidate_domains_for_category(db: AsyncSession, category_id: str, background_tasks: BackgroundTasks):
+    stmt = select(DomainCategory.domain_id).where(DomainCategory.category_id == category_id)
+    result = await db.execute(stmt)
+    domain_ids = result.scalars().all()
+    for d_id in domain_ids:
+        background_tasks.add_task(redis_service.clear_domain_cache, d_id)
 
 
 @router.get("")
@@ -119,6 +128,7 @@ async def list_faq_questions(
 @router.post("")
 async def create_faq_question(
     data: FAQQuestionCreate,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
@@ -180,6 +190,8 @@ async def create_faq_question(
         developer_payload={"data": data.model_dump()}
     )
 
+    await invalidate_domains_for_category(db, new_q.faq_id, background_tasks)
+
     return {
         "status": "success",
         "question": {
@@ -196,6 +208,7 @@ async def create_faq_question(
 async def update_faq_question(
     question_id: str,
     data: FAQQuestionUpdate,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
@@ -267,12 +280,15 @@ async def update_faq_question(
         developer_payload={"data": data.model_dump(exclude_unset=True)}
     )
 
+    await invalidate_domains_for_category(db, q.faq_id, background_tasks)
+
     return {"status": "success"}
 
 
 @router.delete("/{question_id}")
 async def delete_faq_question(
     question_id: str,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
@@ -303,12 +319,15 @@ async def delete_faq_question(
         developer_payload={"question_id": question_id}
     )
 
+    await invalidate_domains_for_category(db, q.faq_id, background_tasks)
+
     return {"status": "success"}
 
 
 @router.post("/bulk-delete")
 async def bulk_delete_questions(
     data: BulkDeleteRequest,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
@@ -336,5 +355,9 @@ async def bulk_delete_questions(
         admin_message=f"Bulk deleted (soft) {len(qs)} FAQ questions",
         developer_payload={"question_ids": [q.id for q in qs]}
     )
+    
+    cat_ids = set([q.faq_id for q in qs])
+    for cid in cat_ids:
+        await invalidate_domains_for_category(db, cid, background_tasks)
     
     return {"status": "success", "deleted_count": len(qs)}

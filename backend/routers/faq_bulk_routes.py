@@ -12,6 +12,7 @@ from database.database import get_db, AsyncSessionLocal
 from database.models import Domain, FAQCategory, DomainCategory, FAQQuestion
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
+from services.redis_service import redis_service
 from services.audit_service import log_action
 
 logger = logging.getLogger("chatbot.routers.faq_bulk")
@@ -238,6 +239,9 @@ async def bulk_upload_faq(
             org_id,
             to_index
         )
+        
+    for d in domain_cache.values():
+        background_tasks.add_task(redis_service.clear_domain_cache, d.id)
         
     log_action(
         user_uid=user["uid"],

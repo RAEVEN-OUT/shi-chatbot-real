@@ -94,3 +94,55 @@ async def get_analytics_summary(
         "spam_count": int(spam_count),
         "total_leads": total_leads
     }
+
+@router.get("/feedback")
+async def get_feedback(
+    domain_id: Optional[str] = Query(None),
+    limit: int = 50,
+    offset: int = 0,
+    user: dict = Depends(require_subscriber),
+    db: AsyncSession = Depends(get_db)
+):
+    from database.models import MessageFeedback
+    
+    # Verify domain access
+    domain_stmt = select(Domain.id)
+    if user["role"] != "admin":
+        domain_stmt = domain_stmt.where(Domain.organization_id == user["postgres_user"].organization_id)
+    if domain_id:
+        domain_stmt = domain_stmt.where(Domain.id == domain_id)
+        
+    domain_result = await db.execute(domain_stmt)
+    allowed_domains = [row for row in domain_result.scalars().all()]
+    
+    if not allowed_domains:
+        return {"items": [], "total": 0}
+        
+    stmt = select(MessageFeedback).join(ChatSession, MessageFeedback.session_id == ChatSession.id).where(
+        ChatSession.domain_id.in_(allowed_domains)
+    ).order_by(MessageFeedback.created_at.desc()).limit(limit).offset(offset)
+    
+    result = await db.execute(stmt)
+    feedback_items = result.scalars().all()
+    
+    count_stmt = select(func.count(MessageFeedback.id)).join(ChatSession, MessageFeedback.session_id == ChatSession.id).where(
+        ChatSession.domain_id.in_(allowed_domains)
+    )
+    total = await db.scalar(count_stmt) or 0
+    
+    return {
+        "items": [
+            {
+                "id": item.id,
+                "session_id": item.session_id,
+                "message_id": item.message_id,
+                "is_helpful": item.is_helpful,
+                "question": item.question,
+                "answer": item.answer,
+                "retrieval_metadata": item.retrieval_metadata,
+                "created_at": item.created_at
+            }
+            for item in feedback_items
+        ],
+        "total": total
+    }

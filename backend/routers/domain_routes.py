@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List, Optional
@@ -151,6 +152,7 @@ async def create_domain(
 async def update_domain(
     domain_id: str,
     data: DomainUpdate,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
@@ -202,6 +204,8 @@ async def update_domain(
         admin_message=f"Updated settings for domain '{domain.domain_name}'",
         developer_payload={"data": data.model_dump(exclude_unset=True)}
     )
+    
+    background_tasks.add_task(redis_service.clear_domain_cache, domain.id)
     
     return {"status": "success"}
 
@@ -267,6 +271,7 @@ async def bulk_delete_domains(
 @router.post("/{domain_id}/retrain")
 async def retrain_domain(
     domain_id: str,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
@@ -284,6 +289,8 @@ async def retrain_domain(
     db.add(job)
     await db.commit()
     await db.refresh(job)
+    
+    background_tasks.add_task(redis_service.clear_domain_cache, domain.id)
     
     return {
         "status": "success",
@@ -320,6 +327,7 @@ async def get_domain_categories(
 async def update_domain_categories(
     domain_id: str,
     data: DomainCategoriesUpdate,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
@@ -349,6 +357,7 @@ async def update_domain_categories(
     
     # Invalidate Redis category cache
     await redis_service.delete_domain_categories(domain.id)
+    background_tasks.add_task(redis_service.clear_domain_cache, domain.id)
     
     # Note: In a complete implementation, this should trigger a Qdrant sync of all questions 
     # in these categories for this domain. For now, we update the DB.

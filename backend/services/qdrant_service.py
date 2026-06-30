@@ -7,16 +7,32 @@ from qdrant_client.models import (
 )
 from core.config import settings
 from schemas.retrieval import KnowledgeSource
+import hashlib
+import logging
 import asyncio
 import uuid
-import hashlib
 
+logger = logging.getLogger("qdrant_service")
 
 class QdrantService:
     def __init__(self):
-        self.client = AsyncQdrantClient(host=settings.QDRANT_HOST, port=settings.QDRANT_PORT)
+        self.client = AsyncQdrantClient(
+            host=settings.QDRANT_HOST,
+            port=settings.QDRANT_PORT,
+            timeout=10.0
+        )
         self.collection_name = "knowledge_chunks"
         self.vector_size = 768  # nomic-embed-text
+
+    async def check_health(self) -> bool:
+        """Check if Qdrant is available."""
+        try:
+            # Qdrant client has a collections list check which is a good proxy for health
+            await self.client.get_collections()
+            return True
+        except Exception as e:
+            logger.error(f"Qdrant health check failed: {e}")
+            return False
 
     async def ensure_collection(self):
         """Ensure the knowledge_chunks collection exists with all payload indexes."""
@@ -147,14 +163,23 @@ class QdrantService:
                 must=faq_must,
                 must_not=[FieldCondition(key="source_type", match=MatchValue(value="document"))]
             )
+            
+            for attempt in range(2):
+                try:
+                    results = await self.client.search(
+                        collection_name=self.collection_name,
+                        query_vector=query_vector,
+                        query_filter=faq_filter,
+                        limit=limit,
+                        search_params=SearchParams(hnsw_ef=128)
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 1:
+                        logger.error(f"Qdrant FAQ search failed: {e}")
+                        return []
+                    await asyncio.sleep(0.5)
 
-            results = await self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector,
-                query_filter=faq_filter,
-                limit=limit,
-                search_params=SearchParams(hnsw_ef=128)
-            )
             sources = []
             for hit in results:
                 p = hit.payload
@@ -185,13 +210,23 @@ class QdrantService:
                     FieldCondition(key="source_type", match=MatchValue(value="document")),
                 ]
             )
-            results = await self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vector,
-                query_filter=doc_filter,
-                limit=limit,
-                search_params=SearchParams(hnsw_ef=128)
-            )
+            
+            for attempt in range(2):
+                try:
+                    results = await self.client.search(
+                        collection_name=self.collection_name,
+                        query_vector=query_vector,
+                        query_filter=doc_filter,
+                        limit=limit,
+                        search_params=SearchParams(hnsw_ef=128)
+                    )
+                    break
+                except Exception as e:
+                    if attempt == 1:
+                        logger.error(f"Qdrant doc search failed: {e}")
+                        return []
+                    await asyncio.sleep(0.5)
+                    
             sources = []
             for hit in results:
                 p = hit.payload

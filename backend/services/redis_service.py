@@ -1,22 +1,49 @@
 import redis.asyncio as redis
 from core.config import settings
 import json
+import logging
+
+logger = logging.getLogger("redis_service")
 
 class RedisService:
     def __init__(self):
         self.redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
+    async def check_health(self) -> bool:
+        """Check if Redis is available."""
+        try:
+            await self.redis.ping()
+            return True
+        except Exception as e:
+            logger.error(f"Redis health check failed: {e}")
+            return False
+
     async def get_cached_response(self, cache_key: str):
         """Retrieve a cached LLM response."""
-        data = await self.redis.get(cache_key)
-        if data:
-            return json.loads(data)
+        try:
+            data = await self.redis.get(cache_key)
+            if data:
+                return json.loads(data)
+        except Exception as e:
+            logger.warning(f"Redis cache retrieval failed: {e}")
         return None
 
     async def set_cached_response(self, cache_key: str, response: dict, expire: int = 3600):
         """Cache an LLM response."""
-        await self.redis.set(cache_key, json.dumps(response), ex=expire)
+        try:
+            await self.redis.set(cache_key, json.dumps(response), ex=expire)
+        except Exception as e:
+            logger.warning(f"Redis cache set failed: {e}")
         
+    async def clear_domain_cache(self, domain_id: str):
+        """Invalidate all LLM cached responses for a specific domain."""
+        pattern = f"chat:{domain_id}:*"
+        cursor = "0"
+        while cursor != 0:
+            cursor, keys = await self.redis.scan(cursor=cursor, match=pattern, count=100)
+            if keys:
+                await self.redis.delete(*keys)
+
     async def get_cached_embedding(self, text_hash: str):
         """Retrieve a cached embedding vector."""
         data = await self.redis.get(f"embed:{text_hash}")

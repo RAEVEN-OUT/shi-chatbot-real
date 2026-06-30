@@ -28,6 +28,7 @@ from services.document_service import extract_text, ingest_document, _ext
 from services.ollama_service import ollama_service
 from services.qdrant_service import qdrant_service
 from services.redis_service import redis_service
+from services.audit_service import log_action
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ class DocumentOut(BaseModel):
     status: str
     chunk_count: int
     error_message: Optional[str]
+    error_stage: Optional[str]
     domain_id: Optional[str]
     created_at: str
 
@@ -68,6 +70,15 @@ def _doc_out(doc: DocumentSource) -> dict:
         "domain_id": doc.domain_id,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
     }
+
+async def invalidate_cache_for_document(db: AsyncSession, org_id: str, domain_id: Optional[str]):
+    if domain_id:
+        await redis_service.clear_domain_cache(domain_id)
+    else:
+        stmt = select(Domain.id).where(Domain.organization_id == org_id)
+        r = await db.execute(stmt)
+        for d_id in r.scalars().all():
+            await redis_service.clear_domain_cache(d_id)
 
 
 # ── Upload endpoint ───────────────────────────────────────────────────────────
@@ -188,6 +199,7 @@ async def upload_document(
                         await bg_db.commit()
                         if effective_domain_id:
                             await redis_service.delete_domain_capabilities(effective_domain_id)
+                        await invalidate_cache_for_document(bg_db, org_id, effective_domain_id)
                     logger.info(f"[DocumentRoutes] Ingestion complete: {doc_id} ({n_chunks} chunks)")
                 except HTTPException as e:
                     logger.error(f"[DocumentRoutes] Ingestion failed: {doc_id}: {e.detail}")
@@ -324,9 +336,20 @@ async def delete_document(
         raise HTTPException(status_code=502, detail="Failed to delete document from vector store. Aborting to prevent orphan vectors.")
 
     domain_id = doc.domain_id
+    
+    log_action(
+        user_uid=user["uid"],
+        action="DELETE",
+        resource_type="Document",
+        resource_id=doc_id,
+        admin_message=f"Deleted document '{doc.source_title}'",
+        developer_payload={"doc_id": doc_id}
+    )
+
     await db.delete(doc)
     await db.commit()
 
+    await invalidate_cache_for_document(db, org_id, domain_id)
     if domain_id:
         background_tasks.add_task(redis_service.delete_domain_capabilities, domain_id)
 
@@ -357,9 +380,21 @@ async def update_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found.")
 
+    old_title = doc.source_title
     doc.source_title = payload.source_title.strip() or doc.source_title
     await db.commit()
     await db.refresh(doc)
+    
+    log_action(
+        user_uid=user["uid"],
+        action="UPDATE",
+        resource_type="Document",
+        resource_id=doc_id,
+        admin_message=f"Updated metadata for document '{old_title}'",
+        developer_payload={"new_title": doc.source_title}
+    )
+
+    await invalidate_cache_for_document(db, org_id, doc.domain_id)
     
     return _doc_out(doc)
 
@@ -459,8 +494,8 @@ async def replace_document_file(
                         record.chunk_count = n_chunks
                         await bg_db.commit()
                         if domain_id:
-                            from services.redis_service import redis_service
                             await redis_service.delete_domain_capabilities(domain_id)
+                        await invalidate_cache_for_document(bg_db, org_id, domain_id)
                     logger.info(f"[DocumentRoutes] Replacement ingestion complete: {doc_id} ({n_chunks} chunks)")
                 except HTTPException as e:
                     logger.error(f"[DocumentRoutes] Replacement ingestion failed: {doc_id}: {e.detail}")

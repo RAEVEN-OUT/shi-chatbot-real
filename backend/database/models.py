@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, JSON, Index, text
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, JSON, Index, text, Float
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -228,3 +228,34 @@ class DocumentSource(Base):
 
     organization = relationship("Organization")
     domain = relationship("Domain", back_populates="document_sources")
+
+
+class EvaluationMetadata(Base):
+    __tablename__ = "evaluation_metadata"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    session_id = Column(String, index=True)
+    domain_id = Column(String, index=True)
+    question = Column(String)
+    normalized_question = Column(String)
+    retrieval_path = Column(String)
+    retrieved_sources = Column(Integer)
+    prompt_length = Column(Integer)
+    completion_length = Column(Integer)
+    latency = Column(Float)
+    model = Column(String)
+    confidence_scores = Column(JSON)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class MessageFeedback(Base):
+    __tablename__ = "message_feedback"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    session_id = Column(String, index=True)
+    message_id = Column(String, index=True)
+    is_helpful = Column(Boolean)
+    question = Column(String)
+    answer = Column(String)
+    retrieval_metadata = Column(JSON)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

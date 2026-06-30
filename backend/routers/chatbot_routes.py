@@ -1,13 +1,28 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional, List, Dict, Any, Callable, Awaitable
+from pydantic import BaseModel, Field
+from core.config import settings
 from sqlalchemy.future import select
-from pydantic import BaseModel
 from database.database import get_db, AsyncSessionLocal
-from database.models import Domain, FailedQuestion, DomainCategory, FAQQuestion, FAQCategory, FAQ, DocumentSource
+from database.models import Domain, FailedQuestion, DomainCategory, FAQQuestion, FAQCategory, FAQ, DocumentSource, ChatSession, ChatMessage
 from schemas.retrieval import KnowledgeSource
 from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
 from services.redis_service import redis_service
+from core.firebase_auth import require_subscriber
+
+CACHE_PROMPT_VERSION = "v3.0"
+CACHE_RETRIEVAL_VERSION = "v3.0"
+
+def _build_cache_metadata(domain_id: str) -> dict:
+    return {
+        "model": settings.OLLAMA_LLM_MODEL,
+        "domain": domain_id,
+        "prompt_version": CACHE_PROMPT_VERSION,
+        "retrieval_version": CACHE_RETRIEVAL_VERSION
+    }
+
 from utils.nlp_utils import normalize_query
 from utils.intent_utils import detect_intent
 from utils.llm_logger import log_failed_question
@@ -15,9 +30,11 @@ import hashlib
 import logging
 import asyncio
 import re
+import json
+import time
 import time
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Callable, Awaitable
 
 def _strip_preamble(text: str) -> str:
     """Remove LLM thinking-out-loud preambles."""
@@ -43,6 +60,67 @@ router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 FTS_FAST_PATH_RANK = 0.35        
 SEMANTIC_FAST_PATH_SCORE = 0.95  
 LOW_CONFIDENCE_SCORE = 0.60
+
+async def _save_evaluation_metadata(
+    session_id: str,
+    domain_id: str,
+    question: str,
+    normalized_question: str,
+    retrieval_path: str,
+    retrieved_sources: int,
+    prompt_length: int,
+    completion_length: int,
+    latency: float,
+    model: str,
+    confidence_scores: dict
+):
+    from database.database import AsyncSessionLocal
+    from database.models import EvaluationMetadata
+    async with AsyncSessionLocal() as bg_db:
+        eval_meta = EvaluationMetadata(
+            session_id=session_id,
+            domain_id=domain_id,
+            question=question,
+            normalized_question=normalized_question,
+            retrieval_path=retrieval_path,
+            retrieved_sources=retrieved_sources,
+            prompt_length=prompt_length,
+            completion_length=completion_length,
+            latency=latency,
+            model=model,
+            confidence_scores=confidence_scores
+        )
+        bg_db.add(eval_meta)
+        await bg_db.commit()
+
+def _finalize_response(
+    resp: 'ChatResponse',
+    request: 'ChatRequest',
+    metrics: 'PerformanceMetrics',
+    normalized_q: str,
+    retrieval_path: str,
+    background_tasks: BackgroundTasks,
+    confidence_scores: dict = None
+) -> dict:
+    logger.info(json.dumps({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()}))
+    
+    if request.session_id:
+        background_tasks.add_task(
+            _save_evaluation_metadata,
+            session_id=request.session_id,
+            domain_id=request.domain_id,
+            question=request.message,
+            normalized_question=normalized_q,
+            retrieval_path=retrieval_path,
+            retrieved_sources=resp.sources,
+            prompt_length=metrics.analytics.get("prompt_size", 0),
+            completion_length=metrics.analytics.get("completion_length", 0),
+            latency=metrics.get_total_duration(),
+            model=settings.LLM_MODEL,
+            confidence_scores=confidence_scores or {}
+        )
+        
+    return resp.__dict__
 TOKEN_BUDGET = 3000
 
 FOLLOWUP_PRONOUNS = {"it", "that", "this", "they", "those", "he", "she", "them", "these", "his", "hers"}
@@ -294,14 +372,21 @@ async def _load_chat_history(session_id: str, fallback: str) -> list:
         and fallback.lower() not in m.get("ai", "").lower()
     ]
 
-async def _try_cache(cache_key: str, metrics: PerformanceMetrics, metric_key: str = "cache_lookup") -> Optional[ChatResponse]:
+async def _try_cache(cache_key: str, domain_id: str, metrics: PerformanceMetrics, metric_key: str = "cache_lookup") -> Optional[ChatResponse]:
     """Attempt to retrieve a cached LLM response to bypass full retrieval."""
     t0 = time.perf_counter()
     cached = await redis_service.get_cached_response(cache_key)
     metrics.record(metric_key, t0)
     if cached:
-        metrics.analytics["cache_hit"] = True
-        return ChatResponse(answer=cached["answer"], cached=True)
+        meta = cached.get("metadata", {})
+        if (
+            meta.get("model") == settings.OLLAMA_LLM_MODEL and
+            meta.get("domain") == domain_id and
+            meta.get("prompt_version") == CACHE_PROMPT_VERSION and
+            meta.get("retrieval_version") == CACHE_RETRIEVAL_VERSION
+        ):
+            metrics.analytics["cache_hit"] = True
+            return ChatResponse(answer=cached["answer"], cached=True)
     return None
 
 async def _handle_intent(request: ChatRequest, normalized_q: str, ctx: DomainContext, cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> Optional[ChatResponse]:
@@ -335,7 +420,8 @@ async def _handle_intent(request: ChatRequest, normalized_q: str, ctx: DomainCon
         ans = f"I am {bot_name}. {bot_desc}"
 
         logger.info({"event": "INTENT_PATH", "intent": intent, "question": request.message})
-        background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": ans}, 3600)
+        payload = {"answer": ans, "metadata": _build_cache_metadata(request.domain_id)}
+        background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
         if request.session_id:
             background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, ans, normalized_q)
         return ChatResponse(answer=ans, cached=False, sources=0)
@@ -412,7 +498,8 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_
                 "score": top.score,
                 "merged": 1
             })
-            background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": fast_answer}, 3600)
+            payload = {"answer": fast_answer, "metadata": _build_cache_metadata(request.domain_id)}
+            background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
             if request.session_id:
                 background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, fast_answer, current_topic)
             return ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
@@ -549,7 +636,8 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
             base_log["reason"] = "SEMANTIC_FAST_PATH"
             base_log["score"] = max_score
             logger.info(base_log)
-            background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": fast_answer}, 3600)
+            payload = {"answer": fast_answer, "metadata": _build_cache_metadata(request.domain_id)}
+            background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
             return None, ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
 
     if max_score < LOW_CONFIDENCE_SCORE:
@@ -585,7 +673,17 @@ def _detect_query_intent(query: str, top_source_type: str) -> str:
         return "FAQ"
     return "general"
 
-async def _build_context_and_call_llm(request: ChatRequest, current_topic: str, ctx: DomainContext, chat_history: list, result: RetrievalResult, cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> ChatResponse:
+async def _build_context_and_call_llm(
+    request: ChatRequest, 
+    current_topic: str, 
+    ctx: DomainContext, 
+    chat_history: list, 
+    result: RetrievalResult, 
+    cache_key: str, 
+    background_tasks: BackgroundTasks, 
+    metrics: PerformanceMetrics,
+    stream_callback: Optional[Callable[[str], Awaitable[None]]] = None
+) -> ChatResponse:
     """Assemble final context, apply intent-based templates, and generate the final LLM output."""
     t0 = time.perf_counter()
     
@@ -655,12 +753,18 @@ async def _build_context_and_call_llm(request: ChatRequest, current_topic: str, 
     start_time = time.time()
     t0 = time.perf_counter()
     try:
-        answer = await ollama_service.generate_response(
-            system_prompt=system_prompt,
-            user_query=request.message
-        )
-        answer = _validate_and_clean_response(_strip_preamble(answer), ctx.fallback)
+        if stream_callback:
+            raw_answer = ""
+            async for token in ollama_service.generate_response_stream(system_prompt=system_prompt, user_query=request.message):
+                if token:
+                    raw_answer += token
+                    await stream_callback(token)
+            answer = _validate_and_clean_response(_strip_preamble(raw_answer), ctx.fallback)
+        else:
+            raw_answer = await ollama_service.generate_response(system_prompt=system_prompt, user_query=request.message)
+            answer = _validate_and_clean_response(_strip_preamble(raw_answer), ctx.fallback)
     except Exception as e:
+        logger.error(f"LLM generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
     metrics.record("llm_generation", t0)
 
@@ -679,7 +783,8 @@ async def _build_context_and_call_llm(request: ChatRequest, current_topic: str, 
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, path)
         answer = ctx.fallback
     else:
-        background_tasks.add_task(redis_service.set_cached_response, cache_key, {"answer": answer}, 3600)
+        payload = {"answer": answer, "metadata": _build_cache_metadata(request.domain_id)}
+        background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
         if request.session_id:
             background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, answer, current_topic)
         path = "LLM_PATH"
@@ -708,7 +813,8 @@ async def _build_context_and_call_llm(request: ChatRequest, current_topic: str, 
 async def ask_chatbot(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    stream_callback: Optional[Callable[[str], Awaitable[None]]] = None
 ):
     metrics = PerformanceMetrics()
     
@@ -722,15 +828,13 @@ async def ask_chatbot(
     q_hash = hashlib.md5(normalized_q.lower().encode()).hexdigest()
     cache_key = f"chat:{request.domain_id}:{q_hash}"
     
-    cached_resp = await _try_cache(cache_key, metrics)
+    cached_resp = await _try_cache(cache_key, request.domain_id, metrics)
     if cached_resp:
-        logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
-        return cached_resp.__dict__
+        return _finalize_response(cached_resp, request, metrics, normalized_q, "cache", background_tasks)
 
     intent_resp = await _handle_intent(request, normalized_q, ctx, cache_key, background_tasks, metrics)
     if intent_resp:
-        logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
-        return intent_resp.__dict__
+        return _finalize_response(intent_resp, request, metrics, normalized_q, "intent_faq", background_tasks)
 
     resolved_query = await _maybe_rewrite_query(normalized_q, history, metrics)
     
@@ -742,22 +846,119 @@ async def ask_chatbot(
     if resolved_query != normalized_q:
         q_hash = hashlib.md5(resolved_query.lower().encode()).hexdigest()
         cache_key = f"chat:{request.domain_id}:{q_hash}"
-        cached_resp = await _try_cache(cache_key, metrics, metric_key="cache_lookup_after_rewrite")
+        cached_resp = await _try_cache(cache_key, request.domain_id, metrics, metric_key="cache_lookup_after_rewrite")
         if cached_resp:
-            logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
-            return cached_resp.__dict__
+            return _finalize_response(cached_resp, request, metrics, normalized_q, "cache_after_rewrite", background_tasks)
 
     fts_resp = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
     if fts_resp:
-        logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
-        return fts_resp.__dict__
+        return _finalize_response(fts_resp, request, metrics, normalized_q, "fts_fast_path", background_tasks)
 
     retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, cache_key, background_tasks, metrics)
     if semantic_resp:
-        logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
-        return semantic_resp.__dict__
+        scores = {"top_score": retrieval_res.chunks[0].score} if retrieval_res and retrieval_res.chunks else {}
+        return _finalize_response(semantic_resp, request, metrics, normalized_q, "semantic_fast_path", background_tasks, scores)
 
-    final_resp = await _build_context_and_call_llm(request, current_topic, ctx, history, retrieval_res, cache_key, background_tasks, metrics)
+    final_resp = await _build_context_and_call_llm(
+        request, current_topic, ctx, history, retrieval_res, cache_key, background_tasks, metrics, stream_callback
+    )
     
-    logger.info({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()})
-    return final_resp.__dict__
+    scores = {"top_score": retrieval_res.chunks[0].score} if retrieval_res and retrieval_res.chunks else {}
+    return _finalize_response(final_resp, request, metrics, normalized_q, "llm_generation", background_tasks, scores)
+
+@router.post("/debug")
+async def debug_chatbot(
+    request: ChatRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(require_subscriber),
+    db: AsyncSession = Depends(get_db)
+):
+    """Admin-only endpoint to trace exact retrieval steps."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+        
+    debug_info = {
+        "normalized_query": "",
+        "cache_hit": False,
+        "rewrite_performed": False,
+        "fts_results": [],
+        "semantic_retrieval_results": [],
+        "selected_context": "",
+        "prompt_length": 0,
+        "latency_breakdown": {},
+        "final_answer": ""
+    }
+    
+    metrics = PerformanceMetrics()
+    
+    t0 = time.perf_counter()
+    normalized_q = normalize_query(request.message)
+    metrics.record("normalization", t0)
+    debug_info["normalized_query"] = normalized_q
+
+    ctx = await _load_domain_and_caps(request.domain_id, db, background_tasks)
+    history = await _load_chat_history(request.session_id, ctx.fallback)
+
+    q_hash = hashlib.md5(normalized_q.lower().encode()).hexdigest()
+    cache_key = f"chat:{request.domain_id}:{q_hash}"
+    
+    cached_resp = await _try_cache(cache_key, request.domain_id, metrics)
+    if cached_resp:
+        debug_info["cache_hit"] = True
+        debug_info["final_answer"] = cached_resp.answer
+        debug_info["latency_breakdown"] = metrics.to_dict()
+        return debug_info
+
+    intent_resp = await _handle_intent(request, normalized_q, ctx, cache_key, background_tasks, metrics)
+    if intent_resp:
+        debug_info["final_answer"] = intent_resp.answer
+        debug_info["latency_breakdown"] = metrics.to_dict()
+        return debug_info
+
+    resolved_query = await _maybe_rewrite_query(normalized_q, history, metrics)
+    debug_info["rewrite_performed"] = (resolved_query != normalized_q)
+    
+    if resolved_query != normalized_q:
+        current_topic = history[-1].get("topic", history[-1].get("user", "")) if history else normalized_q
+    else:
+        current_topic = normalized_q
+    
+    if resolved_query != normalized_q:
+        q_hash = hashlib.md5(resolved_query.lower().encode()).hexdigest()
+        cache_key = f"chat:{request.domain_id}:{q_hash}"
+        cached_resp = await _try_cache(cache_key, request.domain_id, metrics, metric_key="cache_lookup_after_rewrite")
+        if cached_resp:
+            debug_info["cache_hit"] = True
+            debug_info["final_answer"] = cached_resp.answer
+            debug_info["latency_breakdown"] = metrics.to_dict()
+            return debug_info
+
+    if ctx.has_faqs:
+        fts_results = await search_faqs_fts(db, request.domain_id, resolved_query, limit=5)
+        debug_info["fts_results"] = [c.dict() for c in fts_results]
+
+    fts_resp = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
+    if fts_resp:
+        debug_info["final_answer"] = fts_resp.answer
+        debug_info["latency_breakdown"] = metrics.to_dict()
+        return debug_info
+
+    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, cache_key, background_tasks, metrics)
+    if retrieval_res:
+        debug_info["semantic_retrieval_results"] = [c.dict() for c in retrieval_res.chunks]
+        debug_info["selected_context"] = "\n\n".join([c.content for c in retrieval_res.chunks])
+        
+    if semantic_resp:
+        debug_info["final_answer"] = semantic_resp.answer
+        debug_info["latency_breakdown"] = metrics.to_dict()
+        return debug_info
+
+    final_resp = await _build_context_and_call_llm(
+        request, current_topic, ctx, history, retrieval_res, cache_key, background_tasks, metrics, None
+    )
+    
+    debug_info["final_answer"] = final_resp.answer
+    debug_info["prompt_length"] = metrics.analytics.get("prompt_size", 0)
+    debug_info["latency_breakdown"] = metrics.to_dict()
+    
+    return debug_info

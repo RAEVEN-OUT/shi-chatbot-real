@@ -52,6 +52,14 @@ class LeadCapture(BaseModel):
     phone: Optional[str] = ""
     message: Optional[str] = ""
 
+class FeedbackRequest(BaseModel):
+    session_id: str
+    message_id: str
+    is_helpful: bool
+    question: Optional[str] = ""
+    answer: Optional[str] = ""
+    retrieval_metadata: Optional[dict] = {}
+
 
 # ---------------------------------------------------------------------------
 # Validation Helper
@@ -226,6 +234,34 @@ async def capture_lead(
 
     await db.commit()
     return {"status": "success", "lead_id": new_lead.id, "history_token": lead.session_id}
+
+
+@router.post("/{domain_id}/feedback")
+async def submit_feedback(
+    domain_id: str,
+    payload: FeedbackRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    """Store thumbs-up or thumbs-down feedback for a response."""
+    from database.models import MessageFeedback
+    
+    # Verify domain exists
+    domain = await db.scalar(select(Domain).where(Domain.id == domain_id))
+    if not domain:
+        raise HTTPException(status_code=404, detail="Domain not found")
+        
+    feedback = MessageFeedback(
+        session_id=payload.session_id,
+        message_id=payload.message_id,
+        is_helpful=payload.is_helpful,
+        question=payload.question,
+        answer=payload.answer,
+        retrieval_metadata=payload.retrieval_metadata
+    )
+    db.add(feedback)
+    await db.commit()
+    
+    return {"status": "success", "message": "Feedback stored"}
 
 
 @router.get("/history")
@@ -568,469 +604,64 @@ async def widget_chat_websocket(
             # ── Typing indicator ───────────────────────────────────────────
             await websocket.send_json({"type": "typing"})
             try:
-
-                # ── Normalize query ────────────────────────────────────────────
-                normalized_q = normalize_query(user_msg)
-                resolved_query = normalized_q
-
-                # ── Generic Intent Detection (Fast-Path) ───────────────────────
-                intent = detect_intent(normalized_q)
-                if intent:
-                    domain_settings = domain.settings or {}
-                    if intent in ["greeting", "goodbye", "thanks", "human_request"]:
-                        if intent == "greeting":
-                            ans = domain_settings.get("welcome_message", "Hi! How can I help you today?")
-                        elif intent == "goodbye":
-                            ans = domain_settings.get("farewell_message", "Goodbye! Have a great day!")
-                        elif intent == "thanks":
-                            ans = "You're welcome! Let me know if you need anything else."
-                        elif intent == "human_request":
-                            ans = domain_settings.get("human_request_message", "Please contact our support team or use the available contact options on this website.")
+                from routers.chatbot_routes import ask_chatbot, ChatRequest
+                from fastapi import BackgroundTasks
+                
+                streamed = False
+                async def stream_callback(token: str):
+                    nonlocal streamed
+                    streamed = True
+                    try:
+                        await websocket.send_json({"type": "stream_delta", "text": token})
+                    except Exception:
+                        pass
+                
+                bg_tasks = BackgroundTasks()
+                req = ChatRequest(
+                    domain_id=domain.id,
+                    session_id=session_id,
+                    message=user_msg
+                )
+                
+                # Fetch DB again to pass to ask_chatbot
+                async with AsyncSessionLocal() as chat_db:
+                    resp_dict = await ask_chatbot(req, bg_tasks, chat_db, stream_callback=stream_callback)
+                
+                final_answer = resp_dict.get("answer", "")
+                
+                if streamed:
+                    await websocket.send_json({"type": "stream_done"})
+                else:
+                    source = "cache" if resp_dict.get("cached") else "intent"
+                    if resp_dict.get("fast_path"):
+                        source = "fast_path"
                     
-                        await websocket.send_json({
-                            "type": "message",
-                            "text": ans,
-                            "sender": "ai",
-                            "source": "intent",
-                            "confidence": 1.0
-                        })
-                        asyncio.create_task(run_background_chat_updates(
-                            domain_id=domain.id,
-                            session_id=session_id,
-                            user_msg=user_msg,
-                            ai_msg=ans,
-                            failure_reason=None,
-                            q_hash=None,
-                            query_vector=None
-                        ))
-                        continue
-                    
-                    elif intent in ["bot_identity", "capabilities"]:
-                        bot_name = domain_settings.get("bot_name", "Chatbot")
-                        bot_desc = domain_settings.get("bot_description", "An AI assistant that helps visitors using the knowledge base.")
-                        sys_prompt = (
-    f"You are:\n\n"
-    f"Name: {bot_name}\n"
-    f"Description: {bot_desc}\n\n"
-    f"When the user asks about you, answer naturally in one or two sentences using ONLY the information above.\n"
-    f"Do not invent any additional details."
-)
-                    
-                        full_answer = ""
-                        try:
-                            async for token in ollama_service.generate_response_stream(system_prompt=sys_prompt, user_query=user_msg):
-                                if token:
-                                    full_answer += token
-                                    await websocket.send_json({"type": "stream_delta", "text": token})
-                            await websocket.send_json({"type": "stream_done"})
-                            full_answer = _strip_preamble(full_answer)
-                        except Exception as e:
-                            logger.error(f"Intent LLM error: {e}")
-                            full_answer = "I am an AI assistant. How can I help you?"
-                            await websocket.send_json({
-                                "type": "message",
-                                "text": full_answer,
-                                "sender": "ai",
-                                "source": "intent",
-                                "confidence": 1.0
-                            })
-                        
-                        asyncio.create_task(run_background_chat_updates(
-                            domain_id=domain.id,
-                            session_id=session_id,
-                            user_msg=user_msg,
-                            ai_msg=full_answer,
-                            failure_reason=None,
-                            q_hash=None,
-                            query_vector=None
-                        ))
-                        continue
-
-                # Exclude the message we just saved
-                history_msgs = [m for m in recent_messages if m.id != user_cm.id]
-
-                # ── FIX #7: context-aware query rewriting ──────────────────────
-                # Only rewrite when query is short or contains pronouns/follow-ups.
-                # Only use successful prior exchanges (skip fallback responses).
-                if history_msgs:
-                    words = set(normalized_q.lower().split())
-                    is_short = len(words) < 4
-                    has_followup = bool(words & _FOLLOWUP_WORDS)
-
-                    if is_short or has_followup:
-                        good_pairs = []
-                        current_pair: dict = {}
-                        for m in history_msgs:
-                            if m.sender == "user":
-                                current_pair = {"user": m.message}
-                            elif m.sender == "bot" and "user" in current_pair:
-                                ai_text = m.message
-                                # Skip fallback turns — they add noise not signal
-                                if (
-                                    "don't have enough information" not in ai_text.lower()
-                                    and fallback.lower() not in ai_text.lower()
-                                ):
-                                    current_pair["ai"] = ai_text
-                                    good_pairs.append(current_pair)
-                                current_pair = {}
-
-                        if good_pairs:
-                            try:
-                                resolved_query = await ollama_service.rewrite_query(good_pairs, normalized_q)
-                                logger.info(f"Query rewrite: '{normalized_q}' → '{resolved_query}'")
-                            except Exception as rw_err:
-                                logger.error(f"Query rewrite failed: {rw_err}")
-                                resolved_query = normalized_q
-
-                # ── Cache key uses resolved query ──────────────────────────────
-                q_hash = hashlib.md5(resolved_query.encode()).hexdigest()
-                cache_key = f"chat:{domain.id}:{q_hash}"
-
-                # ── Answer cache (exact match) ──────────────────────────────────
-                cached_response = await redis_service.get_cached_response(cache_key)
-                if cached_response:
-                    cached_answer = cached_response.get("answer", "")
                     await websocket.send_json({
                         "type": "message",
-                        "text": cached_answer,
+                        "text": final_answer,
                         "sender": "ai",
-                        "source": "cache",
+                        "source": source,
                         "confidence": 1.0
                     })
-                    asyncio.create_task(run_background_chat_updates(
-                        domain_id=domain.id,
-                        session_id=session_id,
-                        user_msg=user_msg,
-                        ai_msg=cached_answer
-                    ))
-                    continue
-
-                # ── Embedding cache ────────────────────────────────────────────
-                query_vector = await redis_service.get_cached_embedding(q_hash)
-                need_cache_embedding = False
-                if not query_vector:
-                    try:
-                        query_vector = await ollama_service.generate_embedding(resolved_query)
-                        need_cache_embedding = True
-                    except Exception as embed_err:
-                        logger.error(f"Embedding error: {embed_err}")
-                        await websocket.send_json({"type": "error", "text": "Failed to process query."})
-                        continue
-
-                # ── FIX #8: parallel Qdrant + FTS search ───────────────────────
-                async def get_capabilities():
-                    caps = await redis_service.get_domain_capabilities(domain.id)
-                    if caps is not None:
-                        return caps
-                    async with AsyncSessionLocal() as s:
-                        from sqlalchemy import func
-                        faq_count = await s.scalar(select(func.count(DomainCategory.category_id)).where(DomainCategory.domain_id == domain.id))
-                        doc_count = await s.scalar(select(func.count(DocumentSource.id)).where(DocumentSource.domain_id == domain.id))
-                        caps = {
-                            "has_faqs": (faq_count or 0) > 0,
-                            "has_docs": (doc_count or 0) > 0
-                        }
-                    asyncio.create_task(redis_service.set_domain_capabilities(domain.id, caps))
-                    return caps
-
-                caps = await get_capabilities()
-                has_faqs = caps.get("has_faqs", True)
-                has_docs = caps.get("has_docs", True)
-
-                async def _qdrant():
-                    try:
-                        return await qdrant_service.search_chunks(
-                            tenant_id=domain.organization_id,
-                            query_vector=query_vector,
-                            category_ids=category_ids,
-                            domain_id=domain.id,
-                            limit=15,
-                            skip_faq=not has_faqs,
-                            skip_docs=not has_docs
-                        )
-                    except Exception as e:
-                        logger.error(f"Qdrant search error: {e}")
-                        return []
-
-                async def _fts():
-                    if not has_faqs:
-                        return []
-                    try:
-                        return await search_faqs_fts(search_db, domain.id, resolved_query, limit=5)
-                    except Exception as e:
-                        logger.error(f"FTS search error: {e}")
-                        return []
-
-                async with AsyncSessionLocal() as search_db:
-                    qdrant_chunks, fts_chunks = await asyncio.gather(
-                        _qdrant(),
-                        _fts()
-                    )
-
-                # Merge candidates and remove duplicates
-                seen = set()
-                candidates = []
-                for source in fts_chunks + qdrant_chunks:
-                    if source.id not in seen:
-                        seen.add(source.id)
-                        candidates.append(source)
-
-                # Diversity Ranking (MMR-style penalty for chunks from the same document)
-                top_sources = []
-                selected_docs = {}
                 
-                while candidates and len(top_sources) < 5:
-                    best_idx = 0
-                    best_score = float('-inf')
-                    
-                    for i, src in enumerate(candidates):
-                        current_score = src.score
-                        
-                        if src.source_type == "Document":
-                            doc_id = src.metadata.get("document_source_id")
-                            chunk_idx = src.metadata.get("chunk_index")
-                            
-                            if doc_id and doc_id in selected_docs:
-                                current_score -= 0.05  # Base penalty for same document
-                                
-                                if chunk_idx is not None:
-                                    for picked_idx in selected_docs[doc_id]:
-                                        if abs(picked_idx - chunk_idx) <= 2:
-                                            current_score -= 0.10  # Additional penalty for adjacent chunks
-                                            break
-                        
-                        if current_score > best_score:
-                            best_score = current_score
-                            best_idx = i
-                            
-                    winner = candidates.pop(best_idx)
-                    top_sources.append(winner)
-                    
-                    if winner.source_type == "Document":
-                        doc_id = winner.metadata.get("document_source_id")
-                        chunk_idx = winner.metadata.get("chunk_index")
-                        if doc_id:
-                            selected_docs.setdefault(doc_id, []).append(chunk_idx if chunk_idx is not None else -999)
-
-                faq_count = sum(1 for src in top_sources if src.source_type == "FAQ")
-                doc_count = sum(1 for src in top_sources if src.source_type == "Document")
+                # Run the background tasks created by ask_chatbot
+                for task in bg_tasks.tasks:
+                    asyncio.create_task(task())
                 
-                base_log = {
-                    "event": "RETRIEVAL_SUMMARY",
-                    "question": user_msg,
-                    "embedding_generated": need_cache_embedding,
-                    "faq_results": faq_count,
-                    "document_results": doc_count,
-                    "merged": len(top_sources)
-                }
-
-                # ── No match ───────────────────────────────────────────────────
-                if not top_sources:
-                    base_log["reason"] = "NO_MATCH"
-                    logger.info(base_log)
-                    await websocket.send_json({"type": "stream_delta", "text": fallback})
-                    await websocket.send_json({"type": "stream_done"})
-                    asyncio.create_task(run_background_chat_updates(
-                        domain_id=domain.id,
-                        session_id=session_id,
-                        user_msg=user_msg,
-                        ai_msg=fallback,
-                        failure_reason="NO_MATCH",
-                        q_hash=q_hash if need_cache_embedding else None,
-                        query_vector=query_vector if need_cache_embedding else None
-                    ))
-                    continue
-
-                max_score = top_sources[0].score
-
-                # ── Fast path ≥ 0.95 ───────────────────────────────────────────
-                if max_score >= 0.95:
-                    fast_answer = top_sources[0].metadata.get("answer")
-                    if fast_answer:
-                        base_log["reason"] = "FAST_PATH"
-                        base_log["score"] = max_score
-                        logger.info(base_log)
-                        await websocket.send_json({"type": "stream_delta", "text": fast_answer})
-                        await websocket.send_json({"type": "stream_done"})
-                        asyncio.create_task(run_background_chat_updates(
-                            domain_id=domain.id,
-                            session_id=session_id,
-                            user_msg=user_msg,
-                            ai_msg=fast_answer,
-                            cache_key=cache_key,
-                            q_hash=q_hash if need_cache_embedding else None,
-                            query_vector=query_vector if need_cache_embedding else None
-                        ))
-                        continue
-
-                # ── Early exit < 0.40 ──────────────────────────────────────────
-                if max_score < 0.40:
-                    base_log["reason"] = "LOW_CONFIDENCE"
-                    base_log["score"] = max_score
-                    logger.info(base_log)
-                    await websocket.send_json({"type": "stream_delta", "text": fallback})
-                    await websocket.send_json({"type": "stream_done"})
-                    asyncio.create_task(run_background_chat_updates(
-                        domain_id=domain.id,
-                        session_id=session_id,
-                        user_msg=user_msg,
-                        ai_msg=fallback,
-                        failure_reason="LOW_CONFIDENCE",
-                        q_hash=q_hash if need_cache_embedding else None,
-                        query_vector=query_vector if need_cache_embedding else None
-                    ))
-                    continue
-
-                # ── LLM RAG path (0.40 – 0.95) ────────────────────────────────
-                
-                # Context Expansion
-                try:
-                    expansions = await qdrant_service.expand_document_chunks(domain.organization_id, top_sources)
-                except Exception as e:
-                    logger.error(f"Context expansion error: {e}")
-                    expansions = {}
-
-                context_parts = []
-                current_tokens = 0
-                
-                for i, item in enumerate(top_sources, 1):
-                    item_text = item.content
-                    
-                    if item.source_type == "Document":
-                        doc_id = item.metadata.get("document_source_id")
-                        chunk_idx = item.metadata.get("chunk_index")
-                        
-                        if doc_id and chunk_idx is not None:
-                            prev_text = expansions.get((doc_id, chunk_idx - 1))
-                            next_text = expansions.get((doc_id, chunk_idx + 1))
-                            
-                            if prev_text:
-                                prev_tokens = _estimate_tokens(prev_text)
-                                if current_tokens + _estimate_tokens(item_text) + prev_tokens <= MAX_CONTEXT_TOKENS:
-                                    item_text = prev_text + "\n\n" + item_text
-                                    
-                            if next_text:
-                                next_tokens = _estimate_tokens(next_text)
-                                if current_tokens + _estimate_tokens(item_text) + next_tokens <= MAX_CONTEXT_TOKENS:
-                                    item_text = item_text + "\n\n" + next_text
-                                    
-                    item_tokens = _estimate_tokens(item_text)
-                    if current_tokens + item_tokens > MAX_CONTEXT_TOKENS and current_tokens > 0:
-                        break
-                        
-                    current_tokens += item_tokens
-                    context_parts.append(
-                        f"--------------------------------\n"
-                        f"Source {i}\n"
-                        f"Type\n"
-                        f"{item.source_type}\n"
-                        f"Content\n"
-                        f"{item_text}\n"
-                        f"--------------------------------"
-                    )
-                    
-                context_text = "\n".join(context_parts)
-
-                # Build prompt with summary + recent history
-                prompt_parts = []
-                if chat_summary:
-                    prompt_parts.append(f"Conversation summary so far:\n{chat_summary}")
-
-                if history_msgs:
-                    hist_lines = []
-                    for m in history_msgs[-6:]:  # last 3 turns = 6 messages
-                        role = "User" if m.sender == "user" else "Assistant"
-                        hist_lines.append(f"{role}: {m.message}")
-                    prompt_parts.append("Recent conversation:\n" + "\n".join(hist_lines))
-
-                prompt_parts.append(f"Knowledge Base\n\n{context_text}")
-                prompt_context = "\n\n".join(prompt_parts)
-
-                system_prompt = (
-    f"Identity\n"
-    f"--------\n"
-    f"You are the AI assistant for {domain.domain_name}.\n\n"
-
-    f"Behaviour\n"
-    f"---------\n"
-    f"Answer naturally, professionally, and concisely.\n"
-    f"Correct obvious spelling mistakes silently.\n\n"
-
-    f"Rules\n"
-    f"-----\n"
-    f"1. Use ONLY the supplied Knowledge Base.\n"
-    f"2. Never use outside knowledge.\n"
-    f"3. If the answer cannot be completely supported by the Knowledge Base, reply EXACTLY:\n"
-    f"\"{fallback}\"\n"
-    f"4. Return only the information required to answer the question.\n"
-    f"5. Do NOT copy entire FAQ answers or document chunks.\n"
-    f"6. Treat the Knowledge Base as reference material, not as the response.\n"
-    f"7. Extract the answer and write a new concise response.\n"
-    f"8. Do NOT mention the Knowledge Base or sources.\n"
-    f"9. If multiple retrieved passages contain the same information, merge them into one concise answer.\n"
-    f"10. If the answer is a list, include only the relevant items.\n"
-    f"11. If the question is Yes/No, begin with 'Yes.' or 'No.' followed by one short explanation.\n"
-    f"12. Never begin answers with phrases like 'According to...', 'Based on...', or 'The Knowledge Base says...'.\n\n"
-
-    f"Target Response Length\n"
-    f"----------------------\n"
-    f"- Simple fact: 1 sentence.\n"
-    f"- Normal question: 1-2 sentences.\n"
-    f"- Complex explanation: Maximum 5 sentences unless the user explicitly requests more detail.\n\n"
-
-    f"{prompt_context}"
-)
-
-                # ── Stream tokens ──────────────────────────────────────────────
-                start_time = time.time()
-                full_answer = ""
-                try:
-                    async for token in ollama_service.generate_response_stream(
-                        system_prompt=system_prompt,
-                        user_query=user_msg
-                    ):
-                        if token:
-                            full_answer += token
-                            await websocket.send_json({"type": "stream_delta", "text": token})
-
-                    await websocket.send_json({"type": "stream_done"})
-                    full_answer = _strip_preamble(full_answer)
-                    duration = time.time() - start_time
-
-                    failure_reason = None
-                    if (
-                        fallback.lower() in full_answer.lower()
-                        or "i don't have enough information" in full_answer.lower()
-                    ):
-                        failure_reason = "LLM_FAILURE"
-                        display_answer = fallback
-                    else:
-                        display_answer = full_answer
-
-                    base_log["prompt_tokens"] = _estimate_tokens(system_prompt) + _estimate_tokens(user_msg)
-                    base_log["llm_response_time"] = f"{duration:.1f}s"
-                    base_log["reason"] = failure_reason or "LLM_PATH"
-                    base_log["score"] = max_score
-                    logger.info(base_log)
-
-                    asyncio.create_task(run_background_chat_updates(
-                        domain_id=domain.id,
-                        session_id=session_id,
-                        user_msg=user_msg,
-                        ai_msg=display_answer,
-                        failure_reason=failure_reason,
-                        cache_key=cache_key if not failure_reason else None,
-                        q_hash=q_hash if need_cache_embedding else None,
-                        query_vector=query_vector if need_cache_embedding else None
-                    ))
-
-                except Exception as stream_err:
-                    logger.error(f"Ollama streaming error: {stream_err}")
-                    await websocket.send_json({"type": "error", "text": "AI response error. Please try again."})
-
-            except Exception as loop_err:
-                logger.error(f"Unexpected error processing message: {loop_err}")
-                await websocket.send_json({"type": "error", "text": "An unexpected error occurred. Please try again."})
+                # Run widget's background update to save DB
+                asyncio.create_task(run_background_chat_updates(
+                    domain_id=domain.id,
+                    session_id=session_id,
+                    user_msg=user_msg,
+                    ai_msg=final_answer,
+                    failure_reason=None,
+                    cache_key=None,
+                    q_hash=None,
+                    query_vector=None
+                ))
+            except Exception as e:
+                logger.error(f"Chatbot pipeline error: {e}")
+                await websocket.send_json({"type": "error", "text": "AI response error. Please try again."})
 
     except WebSocketDisconnect:
         logger.info(f"WS disconnected: session={session_id}")
