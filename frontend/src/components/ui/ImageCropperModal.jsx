@@ -1,4 +1,5 @@
 import React, { useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import Cropper from 'react-easy-crop';
 import { X, Check } from 'lucide-react';
 
@@ -80,7 +81,7 @@ export default function ImageCropperModal({ imageSrc, onCropComplete, onCancel }
     }
   };
 
-  return (
+  const modalContent = (
     <div className="fixed inset-0 z-[99999] bg-gray-900/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl overflow-hidden shadow-2xl w-full max-w-md flex flex-col">
         <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
@@ -148,4 +149,6 @@ export default function ImageCropperModal({ imageSrc, onCropComplete, onCancel }
       </div>
     </div>
   );
+
+  return typeof document !== 'undefined' ? createPortal(modalContent, document.body) : modalContent;
 }

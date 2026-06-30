@@ -13,14 +13,11 @@ export default function WidgetStyleTab({ domain }) {
     theme_color: '#3B82F6',
     title: 'Support Chat',
     placeholder: 'Type your question...',
-    welcome_message: 'Hi there! How can I help you today?',
-    logo_url: '',
-    border_radius: '12px',
+    welcome_message: '',
     font_color: '#ffffff',
-    bot_name: 'SHI Chatbot',
-    bot_description: 'An AI assistant that helps visitors using the knowledge base.',
-    farewell_message: 'Goodbye! Have a great day!',
-    human_request_message: 'Please contact our support team or use the available contact options on this website.'
+    bot_name: '',
+    bot_description: '',
+    farewell_message: ''
   });
 
   useEffect(() => {
@@ -32,14 +29,11 @@ export default function WidgetStyleTab({ domain }) {
             theme_color: data.theme_color || '#3B82F6',
             title: data.title || 'Support Chat',
             placeholder: data.placeholder || 'Type your question...',
-            welcome_message: data.welcome_message || 'Hi there! How can I help you today?',
-            logo_url: data.logo_url || data.botAvatar || '',
-            border_radius: data.border_radius || '12px',
+            welcome_message: data.welcome_message || '',
             font_color: data.font_color || '#ffffff',
-            bot_name: data.bot_name || data.botName || 'SHI Chatbot',
-            bot_description: data.bot_description || 'An AI assistant that helps visitors using the knowledge base.',
-            farewell_message: data.farewell_message || 'Goodbye! Have a great day!',
-            human_request_message: data.human_request_message || 'Please contact our support team or use the available contact options on this website.'
+            bot_name: data.bot_name || data.botName || '',
+            bot_description: data.bot_description || '',
+            farewell_message: data.farewell_message || ''
           });
         }
       } catch (e) {
@@ -77,13 +71,10 @@ export default function WidgetStyleTab({ domain }) {
         title: config.title,
         placeholder: config.placeholder,
         welcome_message: config.welcome_message,
-        logo_url: config.logo_url,
-        border_radius: config.border_radius,
         font_color: config.font_color,
         bot_name: config.bot_name,
         bot_description: config.bot_description,
-        farewell_message: config.farewell_message,
-        human_request_message: config.human_request_message
+        farewell_message: config.farewell_message
       });
       toast.success("Widget styling updated successfully!");
     } catch(e) {
@@ -220,18 +211,6 @@ export default function WidgetStyleTab({ domain }) {
                 placeholder="Goodbye! Have a great day!" 
               />
             </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider">Human Handoff Request</label>
-              <input 
-                required 
-                type="text" 
-                value={config.human_request_message} 
-                onChange={e => setConfig({...config, human_request_message: e.target.value})} 
-                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none" 
-                placeholder="Please contact our support team directly." 
-              />
-            </div>
           </div>
 
           <div className="space-y-2">
@@ -245,15 +224,7 @@ export default function WidgetStyleTab({ domain }) {
             />
           </div>
 
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Logo URL (Optional)</label>
-            <input 
-              type="text" 
-              value={config.logo_url}
-              onChange={e => setConfig({...config, logo_url: e.target.value})}
-              className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 focus:outline-none"
-            />
-          </div>
+
 
           <button 
             type="submit"
@@ -267,9 +238,9 @@ export default function WidgetStyleTab({ domain }) {
         {/* Live Preview */}
         <div className="flex justify-center lg:justify-start items-start pt-2 lg:pt-0">
           {/* Mock Widget UI */}
-          <div className="w-full max-w-[360px] h-[500px] bg-white shadow-2xl flex flex-col overflow-hidden" style={{ border: '1px solid rgba(0,0,0,0.1)', borderRadius: config.border_radius }}>
+          <div className="w-full max-w-[360px] h-[500px] bg-white shadow-2xl flex flex-col overflow-hidden" style={{ border: '1px solid rgba(0,0,0,0.1)', borderRadius: '12px' }}>
             {/* Header */}
-            <div className="p-4 flex justify-between items-center" style={{ backgroundColor: config.color, color: config.font_color }}>
+            <div className="p-4 flex justify-between items-center" style={{ backgroundColor: config.theme_color, color: config.font_color }}>
               <div>
                 <h4 className="font-bold">{config.title}</h4>
                 <p className="text-xs opacity-90">We typically reply in minutes</p>
@@ -284,7 +255,7 @@ export default function WidgetStyleTab({ domain }) {
               <div className="bg-white border border-gray-200 text-gray-800 p-3 rounded-2xl rounded-tl-none w-fit text-sm max-w-[85%]">
                 {config.welcome_message}
               </div>
-              <div className="p-3 rounded-2xl rounded-tr-none w-fit text-sm ml-auto max-w-[85%]" style={{ backgroundColor: config.color, color: config.font_color }}>
+              <div className="p-3 rounded-2xl rounded-tr-none w-fit text-sm ml-auto max-w-[85%]" style={{ backgroundColor: config.theme_color, color: config.font_color }}>
                 I have a question about my account.
               </div>
             </div>
@@ -293,7 +264,7 @@ export default function WidgetStyleTab({ domain }) {
             <div className="p-4 bg-white border-t border-slate-100">
               <div className="bg-gray-50 border border-gray-200 rounded-full flex items-center p-1 pl-4">
                 <input type="text" placeholder={config.placeholder} className="flex-1 bg-transparent border-none outline-none text-sm text-gray-800" disabled />
-                <div className="w-8 h-8 rounded-full flex items-center justify-center ml-2" style={{ backgroundColor: config.color, color: config.font_color }}>
+                <div className="w-8 h-8 rounded-full flex items-center justify-center ml-2" style={{ backgroundColor: config.theme_color, color: config.font_color }}>
                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
                 </div>
               </div>

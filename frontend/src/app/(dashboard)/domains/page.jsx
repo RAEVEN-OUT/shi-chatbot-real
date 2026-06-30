@@ -28,7 +28,7 @@ export default function Domains() {
   const [newDomain, setNewDomain] = useState({
     name: '',
     url: '',
-    welcome_message: 'Welcome to Acme Support.',
+    welcome_message: 'Welcome, How may I help you?',
     fallback_message: 'Sorry, we could not find an answer. Please contact support.',
     helpline_number: '',
     widget_title: 'Support Assistant',
@@ -169,7 +169,7 @@ export default function Domains() {
       setNewDomain({
         name: '',
         url: '',
-        welcome_message: 'Welcome to Acme Support.',
+        welcome_message: 'Welcome,how may I help you?',
         fallback_message: 'Sorry, we could not find an answer. Please contact support.',
         helpline_number: '',
         widget_title: 'Support Assistant',
@@ -397,7 +397,7 @@ export default function Domains() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Display Name</label>
-                  <input required type="text" value={newDomain.name} onChange={e => setNewDomain({...newDomain, name: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 focus:border-primary focus:outline-none" placeholder="Acme Corp" />
+                  <input required type="text" value={newDomain.name} onChange={e => setNewDomain({...newDomain, name: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 focus:border-primary focus:outline-none" placeholder="Chatbot" />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Website URL</label>
@@ -410,7 +410,7 @@ export default function Domains() {
                       validateUrl(e.target.value);
                     }} 
                     className={`w-full bg-white border rounded-xl px-4 py-2.5 text-gray-900 focus:outline-none ${urlError ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-primary'}`} 
-                    placeholder="acme.com" 
+                    placeholder="domain.com" 
                   />
                   <p className="text-xs text-gray-500 mt-1">
                     Enter domain only. Example: example.com
@@ -435,7 +435,7 @@ export default function Domains() {
 
               <div>
                 <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Welcome Message</label>
-                <input required type="text" value={newDomain.welcome_message} onChange={e => setNewDomain({...newDomain, welcome_message: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 focus:border-primary focus:outline-none" placeholder="Welcome to Acme Support." />
+                <input required type="text" value={newDomain.welcome_message} onChange={e => setNewDomain({...newDomain, welcome_message: e.target.value})} className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 focus:border-primary focus:outline-none" placeholder="Welcome,how may I help you?" />
               </div>
 
               <div>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { domainService } from '@/services/domainService';
 import { Settings, Save, X, Edit, ShieldCheck, Phone, MessageSquare, Globe, User, Palette } from 'lucide-react';
 import { useToast } from '@/contexts/ToastContext';
@@ -9,8 +9,23 @@ export default function OverviewTab({ domain: initialDomain }) {
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
-  const baseUrl = process.env.NEXT_PUBLIC_WITHOUT_API_URL || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '') || 'http://localhost:8000';
-  
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_WITHOUT_API_URL || process.env.NEXT_PUBLIC_API_URL?.replace(/\/api$/, '') || 'http://localhost:8000';
+
+  useEffect(() => {
+    setFormData({
+      name: domain.name || '',
+      domain_url: domain.domain_url || '',
+      welcome_message: domain.welcome_message || domain.widget_welcome_message || 'Welcome,how may I help you?',
+      fallback_message: domain.fallback_message || 'Sorry, we could not find an answer. Please contact support.',
+      helpline_number: domain.helpline_number || '',
+      widget_title: domain.widget_title || 'Support Assistant',
+      widget_color: domain.widget_theme_color || '#7C3AED',
+      bot_avatar: domain.widget_logo_url || '',
+      is_active: domain.is_active !== undefined ? domain.is_active : true
+    });
+    setLogoSource(!domain.widget_logo_url || domain.widget_logo_url === '/static/chatbot-logo.png' ? 'default' : 'custom');
+  }, [domain]);
+
   const [logoSource, setLogoSource] = useState(
     !initialDomain.widget_logo_url || initialDomain.widget_logo_url === '/static/chatbot-logo.png' ? 'default' : 'custom'
   );
@@ -42,10 +57,10 @@ export default function OverviewTab({ domain: initialDomain }) {
 
   const handleCropComplete = async (croppedBlob) => {
     setCropperOpen(false);
-    
+
     // Create a File object from the Blob
     const file = new File([croppedBlob], "avatar.png", { type: "image/png" });
-    
+
     const uploadData = new FormData();
     uploadData.append('file', file);
 
@@ -61,12 +76,12 @@ export default function OverviewTab({ domain: initialDomain }) {
       setUploadingLogo(false);
     }
   };
-  
+
   // Edit form state
   const [formData, setFormData] = useState({
     name: domain.name || '',
     domain_url: domain.domain_url || '',
-    welcome_message: domain.welcome_message || domain.widget_welcome_message || 'Welcome to Acme Support.',
+    welcome_message: domain.welcome_message || domain.widget_welcome_message || 'Welcome,how may I help you?',
     fallback_message: domain.fallback_message || 'Sorry, we could not find an answer. Please contact support.',
     helpline_number: domain.helpline_number || '',
     widget_title: domain.widget_title || 'Support Assistant',
@@ -80,7 +95,7 @@ export default function OverviewTab({ domain: initialDomain }) {
     setSaving(true);
     try {
       await domainService.updateDomain(domain.id, formData);
-      
+
       // Update local domain display state
       setDomain({
         ...domain,
@@ -95,9 +110,9 @@ export default function OverviewTab({ domain: initialDomain }) {
         widget_logo_url: formData.bot_avatar,
         is_active: formData.is_active
       });
-      
+
       setIsEditing(false);
-            toast.success(
+      toast.success(
         "Domain settings updated",
         `${formData.name} updated successfully`
       );
@@ -117,7 +132,7 @@ export default function OverviewTab({ domain: initialDomain }) {
     setFormData({
       name: domain.name || '',
       domain_url: domain.domain_url || '',
-      welcome_message: domain.welcome_message || domain.widget_welcome_message || 'Welcome to Acme Support.',
+      welcome_message: domain.welcome_message || domain.widget_welcome_message || 'Welcome,how may I help you?',
       fallback_message: domain.fallback_message || 'Sorry, we could not find an answer. Please contact support.',
       helpline_number: domain.helpline_number || '',
       widget_title: domain.widget_title || 'Support Assistant',
@@ -138,8 +153,8 @@ export default function OverviewTab({ domain: initialDomain }) {
           <p className="text-xs text-gray-500">Configure public styling, greets, fallbacks, and helpline details.</p>
         </div>
         {!isEditing && (
-          <button 
-            onClick={() => setIsEditing(true)} 
+          <button
+            onClick={() => setIsEditing(true)}
             className="flex items-center gap-1.5 px-4 py-2 bg-white border-gray-200 hover:bg-gray-50 text-gray-900 rounded-xl text-xs font-semibold border transition-all whitespace-nowrap shrink-0"
           >
             <Edit size={14} /> Edit Configuration
@@ -153,26 +168,26 @@ export default function OverviewTab({ domain: initialDomain }) {
             {/* Display Name */}
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Display Name</label>
-              <input 
-                required 
-                type="text" 
-                value={formData.name} 
-                onChange={e => setFormData({...formData, name: e.target.value})} 
-                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none" 
-                placeholder="Acme Corp" 
+              <input
+                required
+                type="text"
+                value={formData.name}
+                onChange={e => setFormData({ ...formData, name: e.target.value })}
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none"
+                placeholder="Chatbot"
               />
             </div>
-            
+
             {/* Website URL / Domain */}
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Website / Domain</label>
-              <input 
-                required 
-                type="text" 
-                value={formData.domain_url} 
-                onChange={e => setFormData({...formData, domain_url: e.target.value})} 
-                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none" 
-                placeholder="acme.com" 
+              <input
+                required
+                type="text"
+                value={formData.domain_url}
+                onChange={e => setFormData({ ...formData, domain_url: e.target.value })}
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none"
+                placeholder="domain.com"
               />
             </div>
           </div>
@@ -181,31 +196,31 @@ export default function OverviewTab({ domain: initialDomain }) {
             {/* Widget Title */}
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Widget Title</label>
-              <input 
-                required 
-                type="text" 
-                value={formData.widget_title} 
-                onChange={e => setFormData({...formData, widget_title: e.target.value})} 
-                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none" 
-                placeholder="Support Assistant" 
+              <input
+                required
+                type="text"
+                value={formData.widget_title}
+                onChange={e => setFormData({ ...formData, widget_title: e.target.value })}
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none"
+                placeholder="Support Assistant"
               />
             </div>
-            
+
             {/* Widget Color */}
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Widget Theme Color</label>
               <div className="flex gap-2">
-                <input 
-                  type="color" 
-                  value={formData.widget_color} 
-                  onChange={e => setFormData({...formData, widget_color: e.target.value})} 
-                  className="w-10 h-10 border-0 bg-transparent rounded-xl cursor-pointer" 
+                <input
+                  type="color"
+                  value={formData.widget_color}
+                  onChange={e => setFormData({ ...formData, widget_color: e.target.value })}
+                  className="w-10 h-10 border-0 bg-transparent rounded-xl cursor-pointer"
                 />
-                <input 
-                  type="text" 
-                  value={formData.widget_color} 
-                  onChange={e => setFormData({...formData, widget_color: e.target.value})} 
-                  className="flex-1 bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 text-xs font-mono uppercase focus:outline-none focus:border-primary" 
+                <input
+                  type="text"
+                  value={formData.widget_color}
+                  onChange={e => setFormData({ ...formData, widget_color: e.target.value })}
+                  className="flex-1 bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 text-xs font-mono uppercase focus:outline-none focus:border-primary"
                 />
               </div>
             </div>
@@ -214,26 +229,26 @@ export default function OverviewTab({ domain: initialDomain }) {
           {/* Welcome Message */}
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Welcome Message</label>
-            <input 
-              required 
-              type="text" 
-              value={formData.welcome_message} 
-              onChange={e => setFormData({...formData, welcome_message: e.target.value})} 
-              className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none" 
-              placeholder="Welcome to Acme Support." 
+            <input
+              required
+              type="text"
+              value={formData.welcome_message}
+              onChange={e => setFormData({ ...formData, welcome_message: e.target.value })}
+              className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none"
+              placeholder="Welcome,how may I help you?"
             />
           </div>
 
           {/* Fallback Message */}
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Fallback Message</label>
-            <textarea 
-              required 
-              rows="2" 
-              value={formData.fallback_message} 
-              onChange={e => setFormData({...formData, fallback_message: e.target.value})} 
-              className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 text-sm focus:border-primary focus:outline-none resize-none" 
-              placeholder="Sorry, we could not find an answer. Please contact support." 
+            <textarea
+              required
+              rows="2"
+              value={formData.fallback_message}
+              onChange={e => setFormData({ ...formData, fallback_message: e.target.value })}
+              className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 text-sm focus:border-primary focus:outline-none resize-none"
+              placeholder="Sorry, we could not find an answer. Please contact support."
             />
           </div>
 
@@ -241,15 +256,15 @@ export default function OverviewTab({ domain: initialDomain }) {
             {/* Helpline Number */}
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Helpline Number</label>
-              <input 
-                type="text" 
-                value={formData.helpline_number} 
-                onChange={e => setFormData({...formData, helpline_number: e.target.value})} 
-                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none" 
-                placeholder="+44 XXXXXXXX" 
+              <input
+                type="text"
+                value={formData.helpline_number}
+                onChange={e => setFormData({ ...formData, helpline_number: e.target.value })}
+                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-gray-900 text-sm focus:border-primary focus:outline-none"
+                placeholder="+44 XXXXXXXX"
               />
             </div>
-            
+
             {/* Bot Avatar */}
             <div className="md:col-span-2 bg-white border-gray-200 border border-gray-200 rounded-2xl p-4">
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Bot Logo / Avatar Settings</label>
@@ -270,7 +285,7 @@ export default function OverviewTab({ domain: initialDomain }) {
                     Custom Upload / URL
                   </button>
                 </div>
-                
+
                 <div className="flex-1 w-full space-y-2">
                   {logoSource === 'default' ? (
                     <div className="flex items-center gap-3">
@@ -281,12 +296,12 @@ export default function OverviewTab({ domain: initialDomain }) {
                     <div className="space-y-3">
                       <div className="flex flex-col sm:flex-row gap-3">
                         <div className="flex-1 w-full">
-                          <input 
-                            type="text" 
-                            value={formData.bot_avatar} 
-                            onChange={e => setFormData({...formData, bot_avatar: e.target.value})} 
-                            className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 sm:py-2 text-gray-900 text-xs focus:border-primary focus:outline-none" 
-                            placeholder="https://example.com/avatar.png" 
+                          <input
+                            type="text"
+                            value={formData.bot_avatar}
+                            onChange={e => setFormData({ ...formData, bot_avatar: e.target.value })}
+                            className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 sm:py-2 text-gray-900 text-xs focus:border-primary focus:outline-none"
+                            placeholder="https://example.com/avatar.png"
                           />
                         </div>
                         <div className="relative shrink-0 w-full sm:w-auto">
@@ -305,7 +320,7 @@ export default function OverviewTab({ domain: initialDomain }) {
                           </label>
                         </div>
                       </div>
-                      
+
                       {formData.bot_avatar && (
                         <div className="flex items-center gap-3">
                           <img src={formData.bot_avatar.startsWith('http') || formData.bot_avatar === '/static/chatbot-logo.png' ? formData.bot_avatar : baseUrl + formData.bot_avatar} alt="Bot Avatar Preview" className="w-16 h-16 shrink-0 rounded-full border border-gray-200 object-cover bg-white" />
@@ -313,7 +328,7 @@ export default function OverviewTab({ domain: initialDomain }) {
                             <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Active Bot Avatar</p>
                           </div>
                         </div>
-                        
+
                       )}
                     </div>
                   )}
@@ -324,28 +339,28 @@ export default function OverviewTab({ domain: initialDomain }) {
 
           {/* Active Status */}
           <div className="flex items-center gap-3 py-2">
-            <input 
-              type="checkbox" 
-              id="editActiveStatus" 
-              checked={formData.is_active} 
-              onChange={e => setFormData({...formData, is_active: e.target.checked})} 
-              className="w-4 h-4 rounded border-[#E2E8F0] bg-white text-primary focus:ring-0 focus:ring-offset-0 cursor-pointer" 
+            <input
+              type="checkbox"
+              id="editActiveStatus"
+              checked={formData.is_active}
+              onChange={e => setFormData({ ...formData, is_active: e.target.checked })}
+              className="w-4 h-4 rounded border-[#E2E8F0] bg-white text-primary focus:ring-0 focus:ring-offset-0 cursor-pointer"
             />
             <label htmlFor="editActiveStatus" className="text-sm font-semibold text-gray-700 cursor-pointer">Chatbot is Active & Enabled</label>
           </div>
 
           {/* Buttons */}
           <div className="pt-4 flex gap-3">
-            <button 
-              type="button" 
-              onClick={handleCancel} 
+            <button
+              type="button"
+              onClick={handleCancel}
               className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white border-gray-200 hover:bg-white border-gray-200 text-gray-900 rounded-xl font-medium transition-colors"
             >
               <X size={16} /> Cancel
             </button>
-            <button 
-              type="submit" 
-              disabled={saving} 
+            <button
+              type="submit"
+              disabled={saving}
               className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl font-medium transition-colors disabled:opacity-50"
             >
               <Save size={16} /> {saving ? 'Saving...' : 'Save Settings'}
@@ -421,7 +436,7 @@ export default function OverviewTab({ domain: initialDomain }) {
                 <MessageSquare size={14} className="text-primary" /> Welcome Greeting message
               </h4>
               <p className="text-gray-700 bg-white border-gray-200 p-4 rounded-xl border border-gray-200 leading-relaxed">
-                "{domain.welcome_message || domain.widget_welcome_message || 'Welcome to Acme Support.'}"
+                "{domain.welcome_message || domain.widget_welcome_message || 'Welcome,how may I help you?'}"
               </p>
             </div>
 
@@ -436,7 +451,7 @@ export default function OverviewTab({ domain: initialDomain }) {
           </div>
         </div>
       )}
-      
+
       <AvatarCropperModal
         isOpen={cropperOpen}
         onClose={() => setCropperOpen(false)}

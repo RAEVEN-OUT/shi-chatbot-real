@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
-import { 
-  ChevronRight, ChevronDown, Globe, Tag, MessageCircle, Search, 
+import {
+  ChevronRight, ChevronDown, Globe, Tag, MessageCircle, Search,
   Plus, Trash2, Save, CheckCircle2, X, RefreshCw, Edit3, Check, UploadCloud, Download, Code, Folder, FileText, Minimize, Maximize, CheckSquare, Square
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
@@ -16,7 +16,7 @@ import ModalWrapper from '@/components/ui/ModalWrapper';
 
 export function CreateDomainModal({ isOpen, onClose, setDomains, selectNode }) {
   const { showToast } = useToast();
-  const [formData, setFormData] = useState({ name: '', url: '', welcome_message: 'Welcome to Acme Support.', fallback_message: 'Sorry, we could not find an answer. Please contact support.', helpline_number: '', widget_title: 'Support Assistant', widget_color: '#7C3AED', bot_avatar: '/static/chatbot-logo.png', is_active: true });
+  const [formData, setFormData] = useState({ name: '', url: '', welcome_message: 'Welcome,how may I help you?', fallback_message: 'Sorry, we could not find an answer. Please contact support.', helpline_number: '', widget_title: 'Support Assistant', widget_color: '#7C3AED', bot_avatar: '/static/chatbot-logo.png', is_active: true });
   const [saving, setSaving] = useState(false);
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -28,7 +28,7 @@ export function CreateDomainModal({ isOpen, onClose, setDomains, selectNode }) {
       showToast('Domain created successfully', 'success');
       selectNode('domain', res.data.id, res.data);
       onClose();
-    } catch (e) { const errData = e.response?.data; const errorMsg = errData?.message || errData?.detail?.message || errData?.detail || 'Error creating domain'; showToast(typeof errorMsg === 'string' ? errorMsg : 'Error creating domain', 'error');} finally { setSaving(false); }
+    } catch (e) { const errData = e.response?.data; const errorMsg = errData?.message || errData?.detail?.message || errData?.detail || 'Error creating domain'; showToast(typeof errorMsg === 'string' ? errorMsg : 'Error creating domain', 'error'); } finally { setSaving(false); }
   };
   return (
     <ModalWrapper isOpen={isOpen} onClose={onClose} title="Create New Domain" icon={Globe} iconColor="text-blue-400">
@@ -39,7 +39,7 @@ export function CreateDomainModal({ isOpen, onClose, setDomains, selectNode }) {
 
 export function EditDomainModal({ isOpen, onClose, domain, setDomains, selectNode }) {
   const { showToast } = useToast();
-  const [formData, setFormData] = useState({ name: domain?.name||'', url: domain?.domain_url||'', welcome_message: domain?.welcome_message||'', fallback_message: domain?.fallback_message||'', helpline_number: domain?.helpline_number||'', widget_title: domain?.widget_title||'', widget_color: domain?.widget_color||'#7C3AED', bot_avatar: domain?.bot_avatar||'', is_active: domain?.is_active??true });
+  const [formData, setFormData] = useState({ name: domain?.name || '', url: domain?.domain_url || '', welcome_message: domain?.welcome_message || '', fallback_message: domain?.fallback_message || '', helpline_number: domain?.helpline_number || '', widget_title: domain?.widget_title || '', widget_color: domain?.widget_color || '#7C3AED', bot_avatar: domain?.bot_avatar || '', is_active: domain?.is_active ?? true });
   const [saving, setSaving] = useState(false);
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -50,7 +50,7 @@ export function EditDomainModal({ isOpen, onClose, domain, setDomains, selectNod
       showToast('Domain updated', 'success');
       selectNode('domain', res.data.id, res.data);
       onClose();
-    } catch (e) { const errData = e.response?.data; const errorMsg = errData?.message || errData?.detail?.message || errData?.detail || 'Error updating domain'; showToast(typeof errorMsg === 'string' ? errorMsg : 'Error updating domain', 'error');} finally { setSaving(false); }
+    } catch (e) { const errData = e.response?.data; const errorMsg = errData?.message || errData?.detail?.message || errData?.detail || 'Error updating domain'; showToast(typeof errorMsg === 'string' ? errorMsg : 'Error updating domain', 'error'); } finally { setSaving(false); }
   };
   return (
     <ModalWrapper isOpen={isOpen} onClose={onClose} title="Edit Domain" icon={Globe} iconColor="text-blue-400">
@@ -102,14 +102,14 @@ export function DomainForm({ formData, setFormData, onSubmit, saving, onCancel, 
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Domain Name</label><input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500" placeholder="Acme Corp" /></div>
-        <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Domain URL</label><input required type="text" value={formData.url} onChange={e => setFormData({ ...formData, url: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500" placeholder="acme.com" /><p className="text-xs text-gray-500 mt-1">Enter domain only. Example: example.com</p></div>
+        <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Domain Name</label><input required type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500" placeholder="Chatbot" /></div>
+        <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Domain URL</label><input required type="text" value={formData.url} onChange={e => setFormData({ ...formData, url: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500" placeholder="domain.com" /><p className="text-xs text-gray-500 mt-1">Enter domain only. Example: example.com</p></div>
         <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Widget Title</label><input required type="text" value={formData.widget_title} onChange={e => setFormData({ ...formData, widget_title: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500" placeholder="Support Assistant" /></div>
         <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Widget Color</label><div className="flex gap-2"><input type="color" value={formData.widget_color} onChange={e => setFormData({ ...formData, widget_color: e.target.value })} className="w-10 h-9 rounded border-0 bg-transparent cursor-pointer p-0" /><input type="text" value={formData.widget_color} onChange={e => setFormData({ ...formData, widget_color: e.target.value })} className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500" /></div></div>
       </div>
-      <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Welcome Message</label><input required type="text" value={formData.welcome_message} onChange={e => setFormData({ ...formData, welcome_message: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500" placeholder="Welcome to Acme Support." /></div>
+      <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Welcome Message</label><input required type="text" value={formData.welcome_message} onChange={e => setFormData({ ...formData, welcome_message: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500" placeholder="Welcome,how may I help you?" /></div>
       <div><label className="block text-sm font-medium text-gray-700 mb-1.5">Fallback Message</label><textarea required rows={2} value={formData.fallback_message} onChange={e => setFormData({ ...formData, fallback_message: e.target.value })} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 resize-none" placeholder="Sorry, we could not find an answer. Please contact support." /></div>
-      
+
       <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-4">
         <div className="flex flex-col md:flex-row gap-4 items-start md:items-center">
           <div>
@@ -147,12 +147,12 @@ export function DomainForm({ formData, setFormData, onSubmit, saving, onCancel, 
             <div className="space-y-3">
               <div className="flex flex-col sm:flex-row gap-3">
                 <div className="flex-1">
-                  <input 
-                    type="text" 
-                    value={formData.bot_avatar} 
-                    onChange={e => setFormData({...formData, bot_avatar: e.target.value})} 
-                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 text-xs focus:border-blue-500 focus:outline-none" 
-                    placeholder="https://example.com/avatar.png" 
+                  <input
+                    type="text"
+                    value={formData.bot_avatar}
+                    onChange={e => setFormData({ ...formData, bot_avatar: e.target.value })}
+                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-2 text-gray-900 text-xs focus:border-blue-500 focus:outline-none"
+                    placeholder="https://example.com/avatar.png"
                   />
                 </div>
                 <div className="relative shrink-0">
@@ -182,7 +182,7 @@ export function DomainForm({ formData, setFormData, onSubmit, saving, onCancel, 
           )}
         </div>
       </div>
-      
+
       <div className="flex items-center gap-2 mt-4"><input type="checkbox" checked={formData.is_active} onChange={e => setFormData({ ...formData, is_active: e.target.checked })} className="rounded bg-gray-50" /><label className="text-sm font-medium text-gray-700">Domain is Active</label></div>
       <div className="flex justify-end gap-3 pt-4"><button type="button" onClick={onCancel} className="px-5 py-2 text-sm text-gray-700 hover:text-gray-900">Cancel</button><button type="submit" disabled={saving} className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-sm">{saving ? 'Saving...' : submitText}</button></div>
     </form>
@@ -195,7 +195,7 @@ export function CreateCategoryModal({ isOpen, onClose, parentId, domains, catego
   const [formData, setFormData] = useState({ faq_title: '', status: 'active' });
   const [formErrors, setFormErrors] = useState({});
   const [saving, setSaving] = useState(false);
-  
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (categories && categories.some(c => c.faq_title.toLowerCase() === formData.faq_title.trim().toLowerCase())) {
@@ -224,7 +224,7 @@ export function CreateCategoryModal({ isOpen, onClose, parentId, domains, catego
       if (errData?.field) setFormErrors({ [errData.field]: errorMsg });
     } finally { setSaving(false); }
   };
-  
+
   return (
     <ModalWrapper isOpen={isOpen} onClose={onClose} title="Create Category" icon={Tag} iconColor="text-purple-400">
       {parentDomain && <p className="text-sm text-purple-400 mb-4 p-3 bg-purple-500/10 rounded-xl border border-purple-500/20">Auto-assigning this category to Domain: <strong>{parentDomain.name || parentDomain.domain_url}</strong></p>}
@@ -235,7 +235,7 @@ export function CreateCategoryModal({ isOpen, onClose, parentId, domains, catego
 
 export function EditCategoryModal({ isOpen, onClose, category, categories, setCategories, selectNode }) {
   const { showToast } = useToast();
-  const [formData, setFormData] = useState({ faq_title: category?.faq_title||'', status: category?.status||'active' });
+  const [formData, setFormData] = useState({ faq_title: category?.faq_title || '', status: category?.status || 'active' });
   const [formErrors, setFormErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const handleSubmit = async (e) => {
@@ -268,12 +268,12 @@ export function EditCategoryModal({ isOpen, onClose, category, categories, setCa
   );
 }
 
-export function CategoryForm({ formData, setFormData, onSubmit, saving, onCancel, submitText, formErrors={}, setFormErrors=()=>{} }) {
+export function CategoryForm({ formData, setFormData, onSubmit, saving, onCancel, submitText, formErrors = {}, setFormErrors = () => { } }) {
   return (
     <form onSubmit={onSubmit} className="space-y-4">
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-1.5">Category Title</label>
-        <input required type="text" maxLength={200} value={formData.faq_title} onChange={e => {setFormData({ ...formData, faq_title: e.target.value }); setFormErrors({});}} className={`w-full bg-gray-50 border rounded-xl px-4 py-2 text-sm focus:outline-none ${formErrors.faq_title ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-purple-500'}`} />
+        <input required type="text" maxLength={200} value={formData.faq_title} onChange={e => { setFormData({ ...formData, faq_title: e.target.value }); setFormErrors({}); }} className={`w-full bg-gray-50 border rounded-xl px-4 py-2 text-sm focus:outline-none ${formErrors.faq_title ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-purple-500'}`} />
         {formErrors.faq_title && <p className="text-red-500 text-xs mt-1">{formErrors.faq_title}</p>}
       </div>
       <div className="grid grid-cols-2 gap-4">
@@ -293,8 +293,8 @@ export function CreateQuestionModal({ isOpen, onClose, parentId, categories, set
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (parentCategory) {
-      const duplicate = parentCategory.questions?.some(q => 
-        q.question.toLowerCase() === formData.question.trim().toLowerCase() && 
+      const duplicate = parentCategory.questions?.some(q =>
+        q.question.toLowerCase() === formData.question.trim().toLowerCase() &&
         q.answer.toLowerCase() === formData.answer.trim().toLowerCase()
       );
       if (duplicate) {
@@ -325,12 +325,12 @@ export function CreateQuestionModal({ isOpen, onClose, parentId, categories, set
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Question Title</label>
-          <input required type="text" maxLength={1000} value={formData.question} onChange={e => {setFormData({ ...formData, question: e.target.value }); setFormErrors({});}} className={`w-full bg-gray-50 border rounded-xl px-4 py-2 text-sm focus:outline-none ${formErrors.question ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-amber-500'}`} />
+          <input required type="text" maxLength={1000} value={formData.question} onChange={e => { setFormData({ ...formData, question: e.target.value }); setFormErrors({}); }} className={`w-full bg-gray-50 border rounded-xl px-4 py-2 text-sm focus:outline-none ${formErrors.question ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-amber-500'}`} />
           {formErrors.question && <p className="text-red-500 text-xs mt-1">{formErrors.question}</p>}
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Answer Content</label>
-          <textarea required maxLength={10000} value={formData.answer} onChange={e => {setFormData({ ...formData, answer: e.target.value }); setFormErrors({});}} rows={4} className={`w-full bg-gray-50 border rounded-xl px-4 py-2 text-sm focus:outline-none ${formErrors.answer ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-amber-500'}`} />
+          <textarea required maxLength={10000} value={formData.answer} onChange={e => { setFormData({ ...formData, answer: e.target.value }); setFormErrors({}); }} rows={4} className={`w-full bg-gray-50 border rounded-xl px-4 py-2 text-sm focus:outline-none ${formErrors.answer ? 'border-red-500 focus:border-red-500' : 'border-gray-200 focus:border-amber-500'}`} />
           {formErrors.answer && <p className="text-red-500 text-xs mt-1">{formErrors.answer}</p>}
         </div>
         <div className="grid grid-cols-2 gap-4">
@@ -346,14 +346,14 @@ export function AssignExistingModal({ isOpen, onClose, type, allItems, assignedI
   const validAssignedIds = (assignedIds || []).map(String).filter(id => allItems.some(item => String(item.id) === id));
   const [selected, setSelected] = useState(new Set(validAssignedIds));
   const [saving, setSaving] = useState(false);
-  
-  useEffect(() => { 
+
+  useEffect(() => {
     if (isOpen) {
       setSelected(new Set((assignedIds || []).map(String).filter(id => allItems.some(item => String(item.id) === id))));
     }
   }, [assignedIds, isOpen, allItems]);
-  const toggle = (id) => { const strId = String(id); const s = new Set(selected); if(s.has(strId)) s.delete(strId); else s.add(strId); setSelected(s); };
-  
+  const toggle = (id) => { const strId = String(id); const s = new Set(selected); if (s.has(strId)) s.delete(strId); else s.add(strId); setSelected(s); };
+
   const handleSave = async () => {
     setSaving(true);
     try {
@@ -365,7 +365,7 @@ export function AssignExistingModal({ isOpen, onClose, type, allItems, assignedI
       setSaving(false);
     }
   };
-  
+
   return (
     <ModalWrapper isOpen={isOpen} onClose={onClose} title={`Assign Existing ${type}s`} icon={Link} iconColor="text-blue-400">
       <div className="space-y-2 max-h-[50vh] overflow-y-auto custom-scrollbar pr-2">
@@ -380,7 +380,7 @@ export function AssignExistingModal({ isOpen, onClose, type, allItems, assignedI
           const name = item.group_title || item.faq_title || item.name;
           return (
             <div key={item.id} onClick={() => toggle(item.id)} className={`flex items-center p-3 rounded-xl border cursor-pointer transition-colors ${isSel ? 'bg-blue-50 border-blue-200' : 'bg-white border-gray-200 hover:border-gray-300'}`}>
-              <div className={`w-5 h-5 rounded mr-3 flex items-center justify-center transition-colors ${isSel ? 'bg-blue-600' : 'border border-gray-300'}`}>{isSel && <CheckCircle2 className="h-4 w-4 text-white"/>}</div>
+              <div className={`w-5 h-5 rounded mr-3 flex items-center justify-center transition-colors ${isSel ? 'bg-blue-600' : 'border border-gray-300'}`}>{isSel && <CheckCircle2 className="h-4 w-4 text-white" />}</div>
               <span className={`text-sm font-medium ${isSel ? 'text-blue-700' : 'text-gray-700'}`}>{name}</span>
             </div>
           );
@@ -400,15 +400,15 @@ export function AssignExistingModal({ isOpen, onClose, type, allItems, assignedI
 
 export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uploadType = 'faq' }) {
   const { showToast } = useToast();
-  const [activeTab, setActiveTab] = useState(uploadType); 
-  
+  const [activeTab, setActiveTab] = useState(uploadType);
+
   // FAQ Bulk Upload State
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
 
   // Document Upload State
-  const [docType, setDocType] = useState('file'); 
+  const [docType, setDocType] = useState('file');
   const [docFile, setDocFile] = useState(null);
   const [docText, setDocText] = useState('');
   const [docTitle, setDocTitle] = useState('');
@@ -474,13 +474,13 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
     if (docType === 'file' && !docFile) return;
     if (docType === 'text' && !docText.trim()) return;
     if (!docTitle.trim()) { showToast('Document Category / Title is required', 'error'); return; }
-    
+
     setDocLoading(true);
     setDocResults(null);
     try {
       const formData = new FormData();
       formData.append("domain_id", domain.id);
-      
+
       if (docType === 'file') {
         formData.append("file", docFile);
         formData.append("source_title", docTitle.trim());
@@ -518,7 +518,7 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
           <div className="bg-gray-50/50 p-4 rounded-xl border border-gray-200">
             <h3 className="text-sm font-bold text-gray-900 mb-2">Instructions</h3>
             <p className="text-sm text-gray-500 mb-3">Upload a CSV or Excel file to bulk import FAQs into <strong>{domain?.domain_url}</strong>. The required columns are: <strong>Category, Question, Answer</strong>. <span className="text-amber-400 font-bold block mt-1">Maximum 250 rows allowed.</span></p>
-            <button onClick={handleDownloadSample} className="text-teal-600 hover:text-teal-500 text-sm flex items-center gap-1 font-medium transition-colors"><Download size={16}/> Download Sample Template</button>
+            <button onClick={handleDownloadSample} className="text-teal-600 hover:text-teal-500 text-sm flex items-center gap-1 font-medium transition-colors"><Download size={16} /> Download Sample Template</button>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Select File (.csv, .xlsx)</label>
@@ -527,7 +527,7 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
           <div className="flex justify-end pt-4">
             <button onClick={onClose} className="px-5 py-2 text-sm text-gray-700 hover:text-gray-900 mr-3">Cancel</button>
             <button onClick={handleUploadFAQ} disabled={!file || loading} className="px-6 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-gray-900 rounded-xl text-sm font-bold shadow-lg shadow-teal-500/20 flex items-center gap-2">
-              {loading ? <RefreshCw className="h-4 w-4 animate-spin"/> : <UploadCloud className="h-4 w-4"/>}
+              {loading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
               {loading ? 'Processing...' : 'Upload FAQs'}
             </button>
           </div>
@@ -546,7 +546,7 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
           </div>
           {results.errors?.length > 0 && (
             <div className="bg-red-100 border border-red-500/20 rounded-xl p-4">
-              <div className="flex items-center gap-2 text-gray-500 mb-3 font-bold text-sm"><ShieldAlert size={16}/> {results.errors.length} Rows Failed</div>
+              <div className="flex items-center gap-2 text-gray-500 mb-3 font-bold text-sm"><ShieldAlert size={16} /> {results.errors.length} Rows Failed</div>
               <div className="max-h-40 overflow-y-auto custom-scrollbar pr-2 space-y-1">
                 {results.errors.map((err, i) => <div key={i} className="text-xs text-red-600 bg-red-950/10 p-2 rounded border border-red-900/20">{err}</div>)}
               </div>
@@ -566,7 +566,7 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
             <button onClick={() => setDocType('file')} className={`text-sm font-medium pb-2 border-b-2 ${docType === 'file' ? 'border-teal-500 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Upload File (PDF/TXT/DOCX)</button>
             <button onClick={() => setDocType('text')} className={`text-sm font-medium pb-2 border-b-2 ${docType === 'text' ? 'border-teal-500 text-teal-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Paste Long Text</button>
           </div>
-          
+
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Document Category / Title <span className="text-red-500">*</span></label>
@@ -588,20 +588,20 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
 
           <div className="flex justify-end pt-4">
             <button onClick={onClose} className="px-5 py-2 text-sm text-gray-700 hover:text-gray-900 mr-3">Cancel</button>
-            <button onClick={handleDocUpload} disabled={(docType==='file'?!docFile:!docText) || !docTitle.trim() || docLoading} className="px-6 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-gray-900 rounded-xl text-sm font-bold shadow-lg shadow-teal-500/20 flex items-center gap-2">
-              {docLoading ? <RefreshCw className="h-4 w-4 animate-spin"/> : <UploadCloud className="h-4 w-4"/>}
+            <button onClick={handleDocUpload} disabled={(docType === 'file' ? !docFile : !docText) || !docTitle.trim() || docLoading} className="px-6 py-2 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-gray-900 rounded-xl text-sm font-bold shadow-lg shadow-teal-500/20 flex items-center gap-2">
+              {docLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
               {docLoading ? 'Uploading...' : 'Upload Document'}
             </button>
           </div>
         </>
       ) : (
         <div className="space-y-4">
-           <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex flex-col items-center justify-center text-center py-8">
-             <CheckCircle2 className="h-12 w-12 text-emerald-500 mb-3" />
-             <h3 className="text-lg font-bold text-gray-900">Document Uploaded</h3>
-             <p className="text-sm text-gray-500 mt-1">The document has been queued and is processing in the background.</p>
-           </div>
-           <div className="flex justify-end pt-4"><button onClick={onClose} className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-xl text-sm font-bold">Close</button></div>
+          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex flex-col items-center justify-center text-center py-8">
+            <CheckCircle2 className="h-12 w-12 text-emerald-500 mb-3" />
+            <h3 className="text-lg font-bold text-gray-900">Document Uploaded</h3>
+            <p className="text-sm text-gray-500 mt-1">The document has been queued and is processing in the background.</p>
+          </div>
+          <div className="flex justify-end pt-4"><button onClick={onClose} className="px-6 py-2 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-xl text-sm font-bold">Close</button></div>
         </div>
       )}
     </div>
