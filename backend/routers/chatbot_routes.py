@@ -686,6 +686,9 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
         base_log["score"] = max_score
         logger.info(base_log)
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, ctx.fallback, "low semantic score")
+        logger.warning(
+    f"LOW SCORE FALLBACK: score={max_score}, threshold={LOW_CONFIDENCE_SCORE}"
+    )
         return None, ChatResponse(answer=ctx.fallback, cached=False, sources=len(top_sources))
 
     return RetrievalResult(
@@ -726,6 +729,7 @@ async def _build_context_and_call_llm(
     stream: bool = False
 ) -> ChatResponse:
     """Assemble final context, apply intent-based templates, and generate the final LLM output."""
+    logger.warning("ENTERED LLM GENERATION")
     t0 = time.perf_counter()
     
     seen_paragraphs = set()
@@ -801,9 +805,12 @@ async def _build_context_and_call_llm(
                     raw_answer += token
                     yield {"type": "token", "content": token}
             answer = _validate_and_clean_response(_strip_preamble(raw_answer), ctx.fallback)
+            logger.warning(f"LLM RAW ANSWER: {answer[:200]}")
         else:
+            logger.warning("CALLING OLLAMA")
             raw_answer = await ollama_service.generate_response(system_prompt=system_prompt, user_query=request.message)
             answer = _validate_and_clean_response(_strip_preamble(raw_answer), ctx.fallback)
+            logger.warning(f"LLM RAW ANSWER: {answer[:200]}")
     except Exception as e:
         logger.error(f"LLM generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"LLM error: {e}")
