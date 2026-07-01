@@ -704,6 +704,16 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
                 fast_path_eligible = False
                 break
 
+    logger.warning("FAST PATH CHECK")
+
+    for i, src in enumerate(top_sources):
+        logger.warning(
+            f"{i}: {src.source_type} "
+            f"score={src.score:.3f} "
+            f"question={src.metadata.get('question')}"
+        )
+
+    logger.warning(f"eligible={fast_path_eligible}")
     if fast_path_eligible:
         metrics.analytics["semantic_fast_path"] = True
         fast_answer = top_sources[0].metadata.get("answer")
