@@ -691,7 +691,7 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
             logger.warning(
             "LOW SCORE FALLBACK"
         )
-        return None, ChatResponse(answer=ctx.fallback, cached=False, sources=len(top_sources))
+            return None, ChatResponse(answer=ctx.fallback, cached=False, sources=len(top_sources))
 
     return RetrievalResult(
         sources=top_sources, 
