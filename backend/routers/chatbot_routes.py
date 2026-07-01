@@ -137,7 +137,7 @@ def _finalize_response(
             prompt_length=metrics.analytics.get("prompt_size", 0),
             completion_length=metrics.analytics.get("completion_length", 0),
             latency=metrics.get_total_duration(),
-            model=settings.LLM_MODEL,
+            model=settings.OLLAMA_LLM_MODEL,
             confidence_scores=confidence_scores or {}
         )
         
