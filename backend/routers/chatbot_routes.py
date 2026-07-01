@@ -717,6 +717,7 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     if fast_path_eligible:
         metrics.analytics["semantic_fast_path"] = True
         fast_answer = top_sources[0].metadata.get("answer")
+        logger.warning(f"FAST ANSWER = {repr(fast_answer)}")
         if fast_answer:
             base_log["reason"] = "SEMANTIC_FAST_PATH"
             base_log["score"] = max_score
@@ -725,6 +726,7 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
             cw_t0 = time.perf_counter()
             background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
             metrics.record("cache_write", cw_t0)
+            logger.warning("RETURNING SEMANTIC FAQ FAST PATH")
             return None, ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
 
     if max_score < LOW_CONFIDENCE_SCORE:
