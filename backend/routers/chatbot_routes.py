@@ -842,7 +842,8 @@ async def _build_context_and_call_llm(
     else:
         yield ChatResponse(answer=answer, cached=False, sources=len(result.sources))
 
-# --- Orchestrator -async def ask_chatbot_stream(
+# --- Orchestrator ---
+    async def ask_chatbot_stream(
     request: 'ChatRequest',
     background_tasks: BackgroundTasks,
     db: AsyncSession
