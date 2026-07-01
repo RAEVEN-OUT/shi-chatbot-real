@@ -58,7 +58,7 @@ router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 # Tuning constants
 # --------------------------------------------------------------------------
 FTS_FAST_PATH_RANK = 0.35        
-SEMANTIC_FAST_PATH_SCORE = 0.95  
+SEMANTIC_FAQ_FAST_PATH_SCORE = 0.75  
 LOW_CONFIDENCE_SCORE = 0.60
 
 async def _save_evaluation_metadata(
@@ -688,7 +688,15 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     max_score = top_sources[0].score
     logger.warning(f"TOP SEMANTIC SCORE = {max_score}")
 
-    if top_sources[0].source_type == "FAQ" and max_score >= SEMANTIC_FAST_PATH_SCORE:
+    fast_path_eligible = False
+    if top_sources[0].source_type == "FAQ" and max_score >= SEMANTIC_FAQ_FAST_PATH_SCORE:
+        fast_path_eligible = True
+        for src in top_sources[1:]:
+            if src.source_type == "FAQ" and (max_score - src.score) < 0.05:
+                fast_path_eligible = False
+                break
+
+    if fast_path_eligible:
         metrics.analytics["semantic_fast_path"] = True
         fast_answer = top_sources[0].metadata.get("answer")
         if fast_answer:
@@ -808,7 +816,7 @@ async def _build_context_and_call_llm(
         f"RULES:\n"
         f"1. Answer ONLY using the Knowledge Base below. If the answer is missing, reply EXACTLY:\n"
         f"\"{ctx.fallback}\"\n"
-        f"2. Never mention the 'Knowledge Base', 'Sources', or say 'According to...'. Do NOT copy verbatim.\n"
+        f"2. Never mention the 'Knowledge Base' or 'Sources'. Preserve the exact factual meaning. Never contradict the retrieved knowledge. Never invent or infer facts. Never change Yes to No or No to Yes. If the source is conditional, preserve the condition exactly. Never answer beyond the retrieved context.\n"
         f"3. Correct user spelling silently.\n"
         f"{specific_rule}\n\n"
         f"{history_text}\n\n"
