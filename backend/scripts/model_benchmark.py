@@ -41,7 +41,11 @@ async def _mock_context(domain_id: str):
         )
 
 async def generate_with_model(model_name: str, system_prompt: str, user_query: str):
-    """Bypass OllamaService's fixed model and request a specific one."""
+    """
+    EXCEPTION: Bypassing the production service layer here.
+    Reason: We are intentionally testing multiple different models simultaneously,
+    whereas the production ollama_service is hardcoded to a single prod model.
+    """
     try:
         resp = await ollama_service.client.post(
             f"{ollama_service.base_url}/api/chat",
@@ -89,21 +93,21 @@ async def ask_llm_judge(question: str, context: str, answer: str):
     """
     
     try:
-        resp = await ollama_service.client.post(
-            f"{ollama_service.base_url}/api/chat",
-            json={
-                "model": ollama_service.llm_model, # Use the primary prod model as the judge
-                "messages": [{"role": "user", "content": eval_prompt}],
-                "stream": False,
-                "format": "json"
-            },
-            timeout=30.0
+        resp_text = await ollama_service.generate_response(
+            system_prompt="You are an impartial evaluator. You must output valid JSON only.",
+            user_query=eval_prompt
         )
-        if resp.status_code == 200:
-            return json.loads(resp.json()["message"]["content"])
+        
+        # Strip potential markdown formatting
+        resp_text = resp_text.strip()
+        if resp_text.startswith("```json"):
+            resp_text = resp_text[7:-3].strip()
+        elif resp_text.startswith("```"):
+            resp_text = resp_text[3:-3].strip()
+            
+        return json.loads(resp_text)
     except Exception as e:
         return {"error": str(e)}
-    return {}
 
 async def run_model_benchmark():
     print("="*60)

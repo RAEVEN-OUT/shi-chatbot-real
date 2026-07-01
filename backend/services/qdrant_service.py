@@ -37,20 +37,31 @@ class QdrantService:
 
     async def ensure_collection(self):
         """Ensure the knowledge_chunks collection exists with all payload indexes."""
-        collections = await self.client.get_collections()
+        @qdrant_retry
+        async def _get_collections():
+            return await self.client.get_collections()
+
+        collections = await _get_collections()
         exists = any(c.name == self.collection_name for c in collections.collections)
         if not exists:
-            await self.client.create_collection(
-                collection_name=self.collection_name,
-                vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
-                hnsw_config=HnswConfigDiff(m=16, ef_construct=200)
-            )
-            for field in ["tenant_id", "category_id", "domain_id", "question_id", "source_type", "document_source_id"]:
-                await self.client.create_payload_index(
+            @qdrant_retry
+            async def _create_collection():
+                return await self.client.create_collection(
                     collection_name=self.collection_name,
-                    field_name=field,
-                    field_schema=PayloadSchemaType.KEYWORD
+                    vectors_config=VectorParams(size=self.vector_size, distance=Distance.COSINE),
+                    hnsw_config=HnswConfigDiff(m=16, ef_construct=200)
                 )
+            await _create_collection()
+
+            for field in ["tenant_id", "category_id", "domain_id", "question_id", "source_type", "document_source_id"]:
+                @qdrant_retry
+                async def _create_index(f):
+                    return await self.client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=f,
+                        field_schema=PayloadSchemaType.KEYWORD
+                    )
+                await _create_index(field)
 
     async def add_chunk(
         self,
@@ -69,20 +80,30 @@ class QdrantService:
             **metadata
         }
         point_id = str(uuid.uuid4())
-        await self.client.upsert(
-            collection_name=self.collection_name,
-            points=[PointStruct(id=point_id, vector=vector, payload=payload)]
-        )
+        
+        @qdrant_retry
+        async def _call_upsert():
+            return await self.client.upsert(
+                collection_name=self.collection_name,
+                points=[PointStruct(id=point_id, vector=vector, payload=payload)]
+            )
+            
+        await _call_upsert()
         return point_id
 
     async def upsert_batch(self, points: list[PointStruct]):
         """Batch insert multiple PointStructs into Qdrant."""
         if not points:
             return
-        await self.client.upsert(
-            collection_name=self.collection_name,
-            points=points
-        )
+            
+        @qdrant_retry
+        async def _call_upsert_batch():
+            return await self.client.upsert(
+                collection_name=self.collection_name,
+                points=points
+            )
+            
+        await _call_upsert_batch()
 
     async def delete_chunks_by_question_id(self, question_id: str):
         """
@@ -90,41 +111,50 @@ class QdrantService:
         Previously, update/delete left stale vectors; search would return
         old answers or ghost matches degrading score accuracy.
         """
-        await self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=FilterSelector(
-                filter=Filter(
-                    must=[FieldCondition(key="question_id", match=MatchValue(value=question_id))]
+        @qdrant_retry
+        async def _call_delete():
+            return await self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[FieldCondition(key="question_id", match=MatchValue(value=question_id))]
+                    )
                 )
             )
-        )
+        await _call_delete()
 
     async def delete_chunks_by_category_id(self, category_id: str):
         """Delete all Qdrant points for a given category_id."""
-        await self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=FilterSelector(
-                filter=Filter(
-                    must=[FieldCondition(key="category_id", match=MatchValue(value=category_id))]
+        @qdrant_retry
+        async def _call_delete():
+            return await self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[FieldCondition(key="category_id", match=MatchValue(value=category_id))]
+                    )
                 )
             )
-        )
+        await _call_delete()
 
     async def delete_chunks_by_document_id(self, document_source_id: str):
         """Delete all Qdrant points belonging to a RAG document."""
-        await self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=FilterSelector(
-                filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key="document_source_id",
-                            match=MatchValue(value=document_source_id)
-                        )
-                    ]
+        @qdrant_retry
+        async def _call_delete():
+            return await self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="document_source_id",
+                                match=MatchValue(value=document_source_id)
+                            )
+                        ]
+                    )
                 )
             )
-        )
+        await _call_delete()
 
     async def search_chunks(
         self,
@@ -308,14 +338,18 @@ class QdrantService:
         
         total_requested = sum(len(indices) for indices in doc_expansions.values())
         
-        try:
-            results, _ = await self.client.scroll(
+        @qdrant_retry
+        async def _call_scroll():
+            return await self.client.scroll(
                 collection_name=self.collection_name,
                 scroll_filter=final_filter,
                 limit=total_requested,
                 with_payload=True,
                 with_vectors=False
             )
+        
+        try:
+            results, _ = await _call_scroll()
         except Exception:
             return {}
             

@@ -146,7 +146,6 @@ class OllamaService:
             logger.warning(f"Ollama rewrite failed after retries: {e}. Falling back to original query.")
             return current_query
 
-    @ollama_retry
     async def generate_response_stream(
         self,
         system_prompt: str,
@@ -155,51 +154,67 @@ class OllamaService:
         """
         Generate a streaming response using the configured LLM.
         """
-        async with self.client.stream(
-            "POST",
-            f"{self.base_url}/api/chat",
-            json={
-                "model": self.llm_model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": user_query
-                    }
-                ],
-                "stream": True,
-                "think": False,
-                "options": {
-            "num_ctx": 8192,
-            "temperature": 0.05,
-            "top_p": 0.8,
-            "repeat_penalty": 1.15,
-            "num_predict": 128,
-            "seed": 42,
-            "stop": [
-                "\nUser:",
-                "\nQuestion:",
-                "\nHuman:",
-                "\nAssistant:"
-            ]
-        }
+        payload = {
+            "model": self.llm_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": user_query
+                }
+            ],
+            "stream": True,
+            "think": False,
+            "options": {
+                "num_ctx": 8192,
+                "temperature": 0.05,
+                "top_p": 0.8,
+                "repeat_penalty": 1.15,
+                "num_predict": 128,
+                "seed": 42,
+                "stop": [
+                    "\nUser:",
+                    "\nQuestion:",
+                    "\nHuman:",
+                    "\nAssistant:"
+                ]
             }
-        ) as response:
+        }
 
+        @ollama_retry
+        async def _open_stream():
+            request = self.client.build_request(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json=payload
+            )
+            response = await self.client.send(request, stream=True)
             response.raise_for_status()
+            return response
 
+        try:
+            response = await _open_stream()
+        except Exception as e:
+            logger.error(f"Failed to open Ollama stream: {e}")
+            return
+
+        try:
             async for line in response.aiter_lines():
                 if not line:
                     continue
-
                 try:
                     chunk = json.loads(line)
                     yield chunk.get("message", {}).get("content", "")
-                except Exception as e:
-                    logger.error(f"Error parsing Ollama stream chunk: {e}")
+                except Exception as parse_e:
+                    logger.error(f"Error parsing Ollama stream chunk: {parse_e}")
+        except Exception as stream_e:
+            logger.error(f"Ollama stream failed during iteration: {stream_e}")
+            # Terminate cleanly without duplicating tokens
+        finally:
+            await response.aclose()
 
 
 ollama_service = OllamaService()

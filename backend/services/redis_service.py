@@ -2,7 +2,7 @@ import redis.asyncio as redis
 from core.config import settings
 import json
 import logging
-from core.retry import redis_read_retry
+from core.retry import redis_read_retry, redis_write_retry
 
 logger = logging.getLogger("redis_service")
 
@@ -35,19 +35,36 @@ class RedisService:
 
     async def set_cached_response(self, cache_key: str, response: dict, expire: int = 3600):
         """Cache an LLM response."""
+        data = json.dumps(response)
+        
+        @redis_write_retry
+        async def _call():
+            return await self.redis.set(cache_key, data, ex=expire)
+            
         try:
-            await self.redis.set(cache_key, json.dumps(response), ex=expire)
+            await _call()
         except Exception as e:
             logger.warning(f"Redis cache set failed: {e}")
         
     async def clear_domain_cache(self, domain_id: str):
         """Invalidate all LLM cached responses for a specific domain."""
         pattern = f"chat:{domain_id}:*"
-        cursor = "0"
-        while cursor != 0:
-            cursor, keys = await self.redis.scan(cursor=cursor, match=pattern, count=100)
+        cursor = '0'
+        
+        @redis_write_retry
+        async def _call_scan(cur):
+            return await self.redis.scan(cursor=cur, match=pattern, count=100)
+            
+        @redis_write_retry
+        async def _call_delete(k):
+            return await self.redis.delete(*k)
+            
+        while True:
+            cursor, keys = await _call_scan(cursor)
             if keys:
-                await self.redis.delete(*keys)
+                await _call_delete(keys)
+            if cursor == 0 or str(cursor) == '0':
+                break
 
     @redis_read_retry
     async def get_cached_embedding(self, text_hash: str):
@@ -59,7 +76,11 @@ class RedisService:
         
     async def set_cached_embedding(self, text_hash: str, vector: list[float], expire: int = 86400 * 7):
         """Cache an embedding vector (1 week default)."""
-        await self.redis.set(f"embed:{settings.OLLAMA_EMBEDDING_MODEL}:{text_hash}", json.dumps(vector), ex=expire)
+        data = json.dumps(vector)
+        @redis_write_retry
+        async def _call():
+            return await self.redis.set(f"embed:{settings.OLLAMA_EMBEDDING_MODEL}:{text_hash}", data, ex=expire)
+        await _call()
 
     @redis_read_retry
     async def get_domain_categories(self, domain_id: str):
@@ -71,11 +92,18 @@ class RedisService:
 
     async def set_domain_categories(self, domain_id: str, category_ids: list[str], expire: int = 86400):
         """Cache domain category IDs (24 hours default)."""
-        await self.redis.set(f"domain_categories:{domain_id}", json.dumps(category_ids), ex=expire)
+        data = json.dumps(category_ids)
+        @redis_write_retry
+        async def _call():
+            return await self.redis.set(f"domain_categories:{domain_id}", data, ex=expire)
+        await _call()
 
     async def delete_domain_categories(self, domain_id: str):
         """Invalidate cached domain category IDs."""
-        await self.redis.delete(f"domain_categories:{domain_id}")
+        @redis_write_retry
+        async def _call():
+            return await self.redis.delete(f"domain_categories:{domain_id}")
+        await _call()
 
     @redis_read_retry
     async def get_domain_capabilities(self, domain_id: str):
@@ -87,11 +115,18 @@ class RedisService:
 
     async def set_domain_capabilities(self, domain_id: str, capabilities: dict, expire: int = 3600):
         """Cache domain capabilities."""
-        await self.redis.set(f"domain_cap:{domain_id}", json.dumps(capabilities), ex=expire)
+        data = json.dumps(capabilities)
+        @redis_write_retry
+        async def _call():
+            return await self.redis.set(f"domain_cap:{domain_id}", data, ex=expire)
+        await _call()
         
     async def delete_domain_capabilities(self, domain_id: str):
         """Invalidate cached domain capabilities."""
-        await self.redis.delete(f"domain_cap:{domain_id}")
+        @redis_write_retry
+        async def _call():
+            return await self.redis.delete(f"domain_cap:{domain_id}")
+        await _call()
 
     async def is_rate_limited(self, widget_key: str, session_id: str, ip: str, limit: int = 100, window: int = 60) -> bool:
         """Check if client is rate limited."""
@@ -115,14 +150,32 @@ class RedisService:
             return
         key = f"chat_history:{session_id}"
         entry = {"user": question, "ai": answer, "topic": topic or question}
-        await self.redis.rpush(key, json.dumps(entry))
+        data = json.dumps(entry)
+        
+        @redis_write_retry
+        async def _call_rpush():
+            return await self.redis.rpush(key, data)
+            
+        @redis_write_retry
+        async def _call_ltrim():
+            return await self.redis.ltrim(key, -20, -1)
+            
+        @redis_write_retry
+        async def _call_expire():
+            return await self.redis.expire(key, expire)
+            
+        await _call_rpush()
         # Keep only last 20 messages to prevent infinite growth
-        await self.redis.ltrim(key, -20, -1)
-        await self.redis.expire(key, expire)
+        await _call_ltrim()
+        await _call_expire()
 
     async def publish_message(self, channel: str, message: dict):
         """Publish a JSON message to a Redis channel."""
-        await self.redis.publish(channel, json.dumps(message))
+        data = json.dumps(message)
+        @redis_write_retry
+        async def _call():
+            return await self.redis.publish(channel, data)
+        await _call()
 
     def get_pubsub(self):
         """Return a Redis pubsub object."""

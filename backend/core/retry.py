@@ -1,6 +1,7 @@
 import logging
 import httpx
 import redis.exceptions
+from qdrant_client.http.exceptions import UnexpectedResponse
 from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from tenacity import (
     retry,
@@ -46,15 +47,29 @@ ollama_retry = retry(**get_retry_config(
 ))
 
 # 2. Qdrant Retry
-# Qdrant client uses httpx underneath or raises Exception. We'll catch Exception for safety
 qdrant_retry = retry(**get_retry_config(
     "QDRANT",
-    (Exception,)
+    (
+        httpx.TimeoutException,
+        httpx.ConnectError,
+        httpx.ReadError,
+        httpx.RemoteProtocolError,
+        UnexpectedResponse
+    )
 ))
 
 # 3. Redis Read Retry
 redis_read_retry = retry(**get_retry_config(
     "REDIS",
+    (
+        redis.exceptions.ConnectionError,
+        redis.exceptions.TimeoutError
+    )
+))
+
+# 3.5 Redis Write Retry
+redis_write_retry = retry(**get_retry_config(
+    "REDIS_WRITE",
     (
         redis.exceptions.ConnectionError,
         redis.exceptions.TimeoutError

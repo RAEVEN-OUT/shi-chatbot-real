@@ -102,7 +102,28 @@ def _finalize_response(
     background_tasks: BackgroundTasks,
     confidence_scores: dict = None
 ) -> dict:
-    logger.info(json.dumps({"event": "PERFORMANCE_PROFILE", "domain_id": request.domain_id, "metrics": metrics.to_dict()}))
+    m = metrics.metrics
+    lines = ["PIPELINE_PROFILE"]
+    keys_to_log = [
+        ("normalization", "normalization"),
+        ("cache", "cache_lookup"),
+        ("intent", "intent_detection"),
+        ("fts", "fts_retrieval"),
+        ("rewrite", "rewrite_query"),
+        ("embedding_cache", "embedding_cache"),
+        ("embedding", "embedding"),
+        ("qdrant", "qdrant_retrieval"),
+        ("expansion", "chunk_expansion"),
+        ("prompt", "prompt_construction"),
+        ("llm", "llm_generation"),
+        ("cache_write", "cache_write")
+    ]
+    for label, key in keys_to_log:
+        val = m.get(key, 0.0)
+        lines.append(f"{label}={int(val)}ms")
+        
+    lines.append(f"total={int(metrics.get_total_duration())}ms")
+    logger.info("\n".join(lines))
     
     if request.session_id:
         background_tasks.add_task(
@@ -421,7 +442,9 @@ async def _handle_intent(request: ChatRequest, normalized_q: str, ctx: DomainCon
 
         logger.info({"event": "INTENT_PATH", "intent": intent, "question": request.message})
         payload = {"answer": ans, "metadata": _build_cache_metadata(request.domain_id)}
+        cw_t0 = time.perf_counter()
         background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
+        metrics.record("cache_write", cw_t0)
         if request.session_id:
             background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, ans, normalized_q)
         return ChatResponse(answer=ans, cached=False, sources=0)
@@ -499,7 +522,9 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_
                 "merged": 1
             })
             payload = {"answer": fast_answer, "metadata": _build_cache_metadata(request.domain_id)}
+            cw_t0 = time.perf_counter()
             background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
+            metrics.record("cache_write", cw_t0)
             if request.session_id:
                 background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, fast_answer, current_topic)
             return ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
@@ -510,13 +535,15 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     """Perform embedding generation, Qdrant vector search, chunk expansion, and result deduplication."""
     t0 = time.perf_counter()
     query_vector = await redis_service.get_cached_embedding(q_hash)
+    metrics.record("embedding_cache", t0)
     if not query_vector:
+        t1 = time.perf_counter()
         try:
             query_vector = await ollama_service.generate_embedding(resolved_query)
             background_tasks.add_task(redis_service.set_cached_embedding, q_hash, query_vector)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Embedding error: {e}")
-    metrics.record("embedding_generation", t0)
+        metrics.record("embedding", t1)
 
     t0 = time.perf_counter()
     try:
@@ -637,7 +664,9 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
             base_log["score"] = max_score
             logger.info(base_log)
             payload = {"answer": fast_answer, "metadata": _build_cache_metadata(request.domain_id)}
+            cw_t0 = time.perf_counter()
             background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
+            metrics.record("cache_write", cw_t0)
             return None, ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
 
     if max_score < LOW_CONFIDENCE_SCORE:
@@ -783,8 +812,11 @@ async def _build_context_and_call_llm(
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, answer, path)
         answer = ctx.fallback
     else:
+        cw_t0 = time.perf_counter()
         payload = {"answer": answer, "metadata": _build_cache_metadata(request.domain_id)}
         background_tasks.add_task(redis_service.set_cached_response, cache_key, payload, 3600)
+        metrics.record("cache_write", cw_t0)
+        
         if request.session_id:
             background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, answer, current_topic)
         path = "LLM_PATH"

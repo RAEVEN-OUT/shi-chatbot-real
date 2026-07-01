@@ -108,11 +108,7 @@ async def health_check(response: Response):
             "ollama": "down"
         },
         "metadata": {
-            "version": settings.VERSION,
-            "ollama_model": settings.OLLAMA_LLM_MODEL,
-            "embedding_model": settings.OLLAMA_EMBEDDING_MODEL,
-            "redis": settings.REDIS_URL,
-            "qdrant": f"{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
+            "version": settings.VERSION
         }
     }
     

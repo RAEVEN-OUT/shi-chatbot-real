@@ -77,21 +77,21 @@ async def ask_llm_judge(question: str, context: str, answer_a: str, answer_b: st
     """
     
     try:
-        resp = await ollama_service.client.post(
-            f"{ollama_service.base_url}/api/chat",
-            json={
-                "model": ollama_service.llm_model,
-                "messages": [{"role": "user", "content": eval_prompt}],
-                "stream": False,
-                "format": "json"
-            },
-            timeout=30.0
+        resp_text = await ollama_service.generate_response(
+            system_prompt="You are an impartial judge. You must output valid JSON only.",
+            user_query=eval_prompt
         )
-        if resp.status_code == 200:
-            return json.loads(resp.json()["message"]["content"])
+        
+        # Strip potential markdown formatting
+        resp_text = resp_text.strip()
+        if resp_text.startswith("```json"):
+            resp_text = resp_text[7:-3].strip()
+        elif resp_text.startswith("```"):
+            resp_text = resp_text[3:-3].strip()
+            
+        return json.loads(resp_text)
     except Exception as e:
         return {"error": str(e)}
-    return {}
 
 async def run_benchmark():
     print("="*60)
