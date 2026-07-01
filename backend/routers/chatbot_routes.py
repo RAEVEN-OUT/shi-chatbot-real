@@ -706,10 +706,10 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
                     f"COMPETING FAQ score={src.score:.3f} diff={diff:.3f}"
                 )
 
-            if diff < 0.05:
-                logger.warning("FAST PATH REJECTED - competing FAQ")
-                fast_path_eligible = False
-                break
+                if diff < 0.05:
+                    logger.warning("FAST PATH REJECTED - competing FAQ")
+                    fast_path_eligible = False
+                    break
 
     logger.warning("FAST PATH CHECK")
 
