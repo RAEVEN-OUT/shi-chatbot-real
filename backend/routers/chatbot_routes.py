@@ -505,6 +505,7 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_
         logger.error(f"FTS error: {e}")
         fts_chunks = []
     metrics.record("fts_retrieval", t0)
+    logger.warning(f"FTS returned {len(fts_chunks)} FAQs")
     
     if fts_chunks:
         metrics.analytics["fts_hit"] = True
@@ -568,6 +569,7 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
         logger.error(f"Qdrant error: {e}")
         qdrant_chunks = []
     metrics.record("qdrant_retrieval", t0)
+    logger.warning(f"Qdrant returned {len(qdrant_chunks)} chunks")
 
     def _normalize_for_dedup(t: str) -> str:
         return re.sub(r'[\W_]+', '', (t or "").lower())
@@ -648,6 +650,7 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     }
 
     if not top_sources:
+        logger.warning("FALLBACK PATH REACHED - no retrieval sources")
         if not ctx.has_faqs and not ctx.has_docs:
             fail_reason = "no context"
         elif not ctx.has_faqs:
@@ -663,6 +666,7 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
         return None, ChatResponse(answer=ctx.fallback, cached=False, sources=0)
 
     max_score = top_sources[0].score
+    logger.warning(f"TOP SEMANTIC SCORE = {max_score}")
 
     if top_sources[0].source_type == "FAQ" and max_score >= SEMANTIC_FAST_PATH_SCORE:
         metrics.analytics["semantic_fast_path"] = True
@@ -863,6 +867,11 @@ async def ask_chatbot_stream(
     metrics.record("normalization", t0)
 
     ctx = await _load_domain_and_caps(request.domain_id, db, background_tasks)
+
+    logger.warning(
+        f"CTX: has_faqs={ctx.has_faqs}, has_docs={ctx.has_docs}, categories={len(ctx.category_ids)}"
+    )
+
     history = await _load_chat_history(request.session_id, ctx.fallback)
 
     q_hash = hashlib.md5(normalized_q.lower().encode()).hexdigest()
@@ -962,6 +971,11 @@ async def debug_chatbot(
     debug_info["normalized_query"] = normalized_q
 
     ctx = await _load_domain_and_caps(request.domain_id, db, background_tasks)
+
+    logger.warning(
+        f"CTX: has_faqs={ctx.has_faqs}, has_docs={ctx.has_docs}, categories={len(ctx.category_ids)}"
+    )
+
     history = await _load_chat_history(request.session_id, ctx.fallback)
 
     q_hash = hashlib.md5(normalized_q.lower().encode()).hexdigest()
