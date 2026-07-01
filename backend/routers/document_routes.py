@@ -44,6 +44,7 @@ class DocumentOut(BaseModel):
     file_type: str
     file_size: Optional[int]
     status: str
+    is_active: bool
     chunk_count: int
     error_message: Optional[str]
     error_stage: Optional[str]
@@ -64,6 +65,7 @@ def _doc_out(doc: DocumentSource) -> dict:
         "file_type": doc.file_type,
         "file_size": doc.file_size,
         "status": doc.status,
+        "is_active": doc.is_active,
         "chunk_count": doc.chunk_count,
         "error_message": doc.error_message,
         "error_stage": doc.error_stage,
@@ -359,7 +361,8 @@ async def delete_document(
 # ── Update endpoint ───────────────────────────────────────────────────────────
 
 class DocumentUpdateIn(BaseModel):
-    source_title: str
+    source_title: Optional[str] = None
+    is_active: Optional[bool] = None
 
 @router.put("/{doc_id}")
 async def update_document(
@@ -381,7 +384,15 @@ async def update_document(
         raise HTTPException(status_code=404, detail="Document not found.")
 
     old_title = doc.source_title
-    doc.source_title = payload.source_title.strip() or doc.source_title
+    if payload.source_title is not None:
+        doc.source_title = payload.source_title.strip() or doc.source_title
+    if payload.is_active is not None:
+        doc.is_active = payload.is_active
+        try:
+            await qdrant_service.set_chunks_active_by_document_id(doc.id, payload.is_active)
+        except Exception as e:
+            logger.error(f"[DocumentRoutes] Failed to update is_active in Qdrant for {doc_id}: {e}")
+            raise HTTPException(status_code=500, detail="Failed to update document status in vector store.")
     await db.commit()
     await db.refresh(doc)
     

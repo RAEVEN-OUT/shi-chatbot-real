@@ -107,7 +107,7 @@ export function CategoryManager({ deletingId, category, categories, setCategorie
       const newQ = res.data.question || res.data;
       setCategories(prev => prev.map(c => c.id === category.id ? { 
         ...c, 
-        questions: [newQ, ...(c.questions || [])], 
+        questions: [newQ, ...(c.questions || []).filter(q => q.id !== newQ.id)],
         questionsLoaded: true,
         active_question_count: (c.active_question_count ?? 0) + (newQ.status === 'active' ? 1 : 0)
       } : c));

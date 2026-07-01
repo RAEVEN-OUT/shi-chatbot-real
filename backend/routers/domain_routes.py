@@ -11,6 +11,10 @@ from database.database import get_db
 from database.models import Domain, RetrainingJob, DomainCategory, FAQCategory
 from services.redis_service import redis_service
 from services.audit_service import log_action
+from services.qdrant_service import qdrant_service
+import logging
+
+logger = logging.getLogger("domain_routes")
 
 router = APIRouter(prefix="/api/domains", tags=["domains"])
 
@@ -228,6 +232,16 @@ async def delete_domain(
     await db.delete(domain)
     await db.commit()
     
+    try:
+        await qdrant_service.delete_chunks_by_domain_id(domain.id)
+    except Exception as e:
+        logger.error(f"Failed to delete Qdrant chunks for domain {domain.id}: {e}")
+        
+    try:
+        await redis_service.purge_domain_cache(domain.id)
+    except Exception as e:
+        logger.error(f"Failed to purge Redis cache for domain {domain.id}: {e}")
+    
     log_action(
         user_uid=user["uid"],
         action="DELETE",
@@ -256,6 +270,17 @@ async def bulk_delete_domains(
         await db.delete(d)
         
     await db.commit()
+    
+    for d in domains:
+        try:
+            await qdrant_service.delete_chunks_by_domain_id(d.id)
+        except Exception as e:
+            logger.error(f"Failed to delete Qdrant chunks for domain {d.id} during bulk delete: {e}")
+            
+        try:
+            await redis_service.purge_domain_cache(d.id)
+        except Exception as e:
+            logger.error(f"Failed to purge Redis cache for domain {d.id} during bulk delete: {e}")
     
     log_action(
         user_uid=user["uid"],

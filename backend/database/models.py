@@ -215,6 +215,7 @@ class DocumentSource(Base):
     file_type = Column(String, nullable=False)         # pdf | txt | docx
     file_size = Column(Integer, nullable=True)
     status = Column(String, default="processing")      # processing | ready | failed
+    is_active = Column(Boolean, default=True)
     chunk_count = Column(Integer, default=0)
     error_message = Column(String, nullable=True)
     error_stage = Column(String, nullable=True)

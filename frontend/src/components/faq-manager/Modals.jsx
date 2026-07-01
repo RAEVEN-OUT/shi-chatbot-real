@@ -308,7 +308,7 @@ export function CreateQuestionModal({ isOpen, onClose, parentId, categories, set
     try {
       const res = await api.post('/faq-questions', { ...formData, faq_id: parentId });
       const newQ = res.data.question || res.data;
-      setCategories(prev => prev.map(c => c.id === parentId ? { ...c, questions: [newQ, ...(c.questions || [])], questionsLoaded: true } : c));
+      setCategories(prev => prev.map(c => c.id === parentId ? { ...c, questions: [newQ, ...(c.questions || []).filter(q => q.id !== newQ.id)], questionsLoaded: true } : c));
       showToast('Question created and vector indexing triggered', 'success');
       selectNode('question', newQ.id, newQ);
       onClose();

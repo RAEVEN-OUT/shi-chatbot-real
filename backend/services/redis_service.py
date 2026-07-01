@@ -65,6 +65,33 @@ class RedisService:
                 await _call_delete(keys)
             if cursor == 0 or str(cursor) == '0':
                 break
+                
+        # Also explicitly clear metadata caches for the domain
+        try:
+            await self.delete_domain_capabilities(domain_id)
+            await self.delete_domain_categories(domain_id)
+        except Exception as e:
+            logger.warning(f"Failed to clear domain metadata cache for {domain_id}: {e}")
+
+    async def purge_domain_cache(self, domain_id: str):
+        """Completely remove all Redis cache keys associated with a deleted domain."""
+        pattern = f"*{domain_id}*"
+        cursor = '0'
+        
+        @redis_write_retry
+        async def _call_scan(cur):
+            return await self.redis.scan(cursor=cur, match=pattern, count=100)
+            
+        @redis_write_retry
+        async def _call_delete(k):
+            return await self.redis.delete(*k)
+            
+        while True:
+            cursor, keys = await _call_scan(cursor)
+            if keys:
+                await _call_delete(keys)
+            if cursor == 0 or str(cursor) == '0':
+                break
 
     @redis_read_retry
     async def get_cached_embedding(self, text_hash: str):

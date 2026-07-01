@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
 import { 
   ChevronRight, ChevronDown, Globe, Tag, MessageCircle, Search, 
-  Plus, Trash2, Save, CheckCircle2, X, RefreshCw, Edit3, Check, UploadCloud, Download, Code, Folder, FileText, Minimize, Maximize, CheckSquare, Square
+  Plus, Trash2, Save, CheckCircle2, X, RefreshCw, Edit3, Check, UploadCloud, Download, Code, Folder, FileText, Minimize, Maximize, CheckSquare, Square, Minus
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { formatDate } from '@/utils/dateFormatter';
@@ -139,7 +139,15 @@ export function DomainManager({ deletingId, domain, domains, setDomains, categor
             </div>
             {validAssignedCategories.length === 0 ? <div className="text-center py-10 bg-white border border-gray-200 rounded-xl"><p className="text-gray-500 text-sm">No categories assigned</p></div> :
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {[...validAssignedCategories].sort((a, b) => (selectedCats.has(b.id) ? 1 : 0) - (selectedCats.has(a.id) ? 1 : 0)).map(c => (
+                {[...validAssignedCategories].sort((a, b) => {
+                  const aSel = selectedCats.has(a.id) ? 1 : 0;
+                  const bSel = selectedCats.has(b.id) ? 1 : 0;
+                  if (aSel !== bSel) return bSel - aSel;
+                  const aActive = a.status === 'active' ? 1 : 0;
+                  const bActive = b.status === 'active' ? 1 : 0;
+                  if (aActive !== bActive) return bActive - aActive;
+                  return (a.faq_title || '').localeCompare(b.faq_title || '');
+                }).map(c => (
                   <div key={c.id} onClick={() => selectNode('category', c.id, c)} className="flex flex-col p-4 bg-white border border-gray-200 rounded-xl relative hover:border-blue-500 transition-colors group shadow-sm cursor-pointer">
                     <div className="absolute top-4 left-4 z-10">
                       <div onClick={(e) => { e.stopPropagation(); setSelectedCats(prev => { const next = new Set(prev); if (next.has(c.id)) next.delete(c.id); else next.add(c.id); return next; }); }} className="cursor-pointer text-gray-400 hover:text-blue-500">
@@ -153,7 +161,7 @@ export function DomainManager({ deletingId, domain, domains, setDomains, categor
                           <Edit3 size={16} />
                         </button>
                         <button onClick={(e) => { e.stopPropagation(); removeCategory(c.id); }} disabled={removingId === c.id} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors disabled:opacity-50" title="Remove Category">
-                          {removingId === c.id ? <RefreshCw size={16} className="animate-spin text-red-500" /> : <Trash2 size={16} className={removingId === c.id ? "" : "hover:text-red-500"} />}
+                          {removingId === c.id ? <RefreshCw size={16} className="animate-spin text-red-500" /> : <Minus size={16} className={removingId === c.id ? "" : "hover:text-red-500"} />}
                         </button>
                       </div>
                     </div>

@@ -17,13 +17,14 @@ import ModalWrapper from '@/components/ui/ModalWrapper';
 export function DocumentManager({ deletingId, document: docNode, documents, setDocuments, selectNode, handleDeleteNode }) {
   const { showToast } = useToast();
   const [editing, setEditing] = useState(false);
-  const [editFormData, setEditFormData] = useState({ source_title: docNode?.source_title || '' });
+  const [editFormData, setEditFormData] = useState({ source_title: docNode?.source_title || '', is_active: docNode?.is_active ?? true });
   const [fileToUpload, setFileToUpload] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isToggling, setIsToggling] = useState(false);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    setEditFormData({ source_title: docNode?.source_title || '' });
+    setEditFormData({ source_title: docNode?.source_title || '', is_active: docNode?.is_active ?? true });
     setFileToUpload(null);
   }, [docNode]);
 
@@ -40,6 +41,23 @@ export function DocumentManager({ deletingId, document: docNode, documents, setD
       showToast('Error updating document', 'error');
     } finally {
       setEditing(false);
+    }
+  };
+
+  const handleToggleStatus = async (checked) => {
+    if (isToggling) return;
+    setIsToggling(true);
+    try {
+      const res = await api.put(`/documents/${docNode.id}`, { is_active: checked });
+      const updatedDoc = res.data;
+      setDocuments(prev => prev.map(d => d.id === docNode.id ? updatedDoc : d));
+      setEditFormData(prev => ({...prev, is_active: checked}));
+      showToast(`Document ${checked ? 'enabled' : 'disabled'}`, 'success');
+      selectNode('document', docNode.id, updatedDoc);
+    } catch (e) {
+      showToast('Error updating document status', 'error');
+    } finally {
+      setIsToggling(false);
     }
   };
 
@@ -132,6 +150,23 @@ export function DocumentManager({ deletingId, document: docNode, documents, setD
                     required
                   />
                 </div>
+
+                <div className="flex items-center justify-between py-2">
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-900">Document Status</h4>
+                    <p className="text-xs text-gray-500">Enable or disable this document in the knowledge base.</p>
+                  </div>
+                  <label className={`relative inline-flex items-center ${isToggling ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer"
+                      checked={editFormData.is_active}
+                      disabled={isToggling}
+                      onChange={(e) => handleToggleStatus(e.target.checked)}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                  </label>
+                </div>
                 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -158,7 +193,7 @@ export function DocumentManager({ deletingId, document: docNode, documents, setD
                 <div className="pt-2 flex justify-end">
                   <button
                     type="submit"
-                    disabled={editing || editFormData.source_title === docNode.source_title}
+                    disabled={editing || (editFormData.source_title === docNode.source_title && editFormData.is_active === docNode.is_active)}
                     className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
                   >
                     {editing ? 'Saving...' : 'Save Changes'}

@@ -313,7 +313,8 @@ async def search_faqs_fts(db: AsyncSession, domain_id: str, query: str, limit: i
         .join(DomainCategory, FAQCategory.id == DomainCategory.category_id)
         .where(
             DomainCategory.domain_id == domain_id,
-            FAQQuestion.status == "active"
+            FAQQuestion.status == "active",
+            FAQCategory.status == "active"
         )
         .where(tsvector.op("@@")(tsquery))
         .order_by(rank.desc())
@@ -362,12 +363,18 @@ async def _load_domain_and_caps(domain_id: str, db: AsyncSession, background_tas
         async with AsyncSessionLocal() as s:
             from sqlalchemy import func
             faq_count = await s.scalar(
-    select(func.count(FAQQuestion.id))
+                select(func.count(FAQQuestion.id))
                 .join(FAQCategory, FAQQuestion.faq_id == FAQCategory.id)
                 .join(DomainCategory, FAQCategory.id == DomainCategory.category_id)
                 .where(DomainCategory.domain_id == domain_id)
             )
-            doc_count = await s.scalar(select(func.count(DocumentSource.id)).where(DocumentSource.domain_id == domain_id))
+            doc_count = await s.scalar(
+                select(func.count(DocumentSource.id))
+                .where(
+                    DocumentSource.domain_id == domain_id,
+                    DocumentSource.is_active == True
+                )
+            )
             caps = {
                 "has_faqs": faq_count > 0,
                 "has_docs": doc_count > 0,
@@ -582,9 +589,12 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     logger.warning(f"Qdrant returned {len(qdrant_chunks)} chunks")
     for q in qdrant_chunks:
         logger.warning(
-            f"QDRANT -> score={q.score:.3f} "
-            f"type={q.source_type} "
-            f"question={q.metadata.get('question')}"
+            f"QDRANT -> score={q.score:.3f} type={q.source_type}\n"
+            f"  title={q.metadata.get('source_title')}\n"
+            f"  filename={q.metadata.get('filename')}\n"
+            f"  document={q.metadata.get('document_source_id')}\n"
+            f"  active={q.metadata.get('is_active')}\n"
+            f"  question={q.metadata.get('question')}"
         )
 
     def _normalize_for_dedup(t: str) -> str:

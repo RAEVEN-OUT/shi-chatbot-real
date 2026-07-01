@@ -62,6 +62,15 @@ class QdrantService:
                         field_schema=PayloadSchemaType.KEYWORD
                     )
                 await _create_index(field)
+                
+            @qdrant_retry
+            async def _create_bool_index():
+                return await self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="is_active",
+                    field_schema=PayloadSchemaType.BOOL
+                )
+            await _create_bool_index()
 
     async def add_chunk(
         self,
@@ -77,6 +86,7 @@ class QdrantService:
             "tenant_id": tenant_id,
             "domain_id": domain_id,
             "text": text,
+            "is_active": metadata.get("is_active", True),
             **metadata
         }
         point_id = str(uuid.uuid4())
@@ -137,6 +147,21 @@ class QdrantService:
             )
         await _call_delete()
 
+    async def set_chunks_active_by_category_id(self, category_id: str, is_active: bool):
+        """Set is_active for all Qdrant points for a given category_id."""
+        @qdrant_retry
+        async def _call_set():
+            return await self.client.set_payload(
+                collection_name=self.collection_name,
+                payload={"is_active": is_active},
+                points=FilterSelector(
+                    filter=Filter(
+                        must=[FieldCondition(key="category_id", match=MatchValue(value=category_id))]
+                    )
+                )
+            )
+        await _call_set()
+
     async def delete_chunks_by_document_id(self, document_source_id: str):
         """Delete all Qdrant points belonging to a RAG document."""
         @qdrant_retry
@@ -149,6 +174,45 @@ class QdrantService:
                             FieldCondition(
                                 key="document_source_id",
                                 match=MatchValue(value=document_source_id)
+                            )
+                        ]
+                    )
+                )
+            )
+        await _call_delete()
+
+    async def set_chunks_active_by_document_id(self, document_source_id: str, is_active: bool):
+        """Set is_active for all Qdrant points for a given document_source_id."""
+        @qdrant_retry
+        async def _call_set():
+            return await self.client.set_payload(
+                collection_name=self.collection_name,
+                payload={"is_active": is_active},
+                points=FilterSelector(
+                    filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="document_source_id",
+                                match=MatchValue(value=document_source_id)
+                            )
+                        ]
+                    )
+                )
+            )
+        await _call_set()
+
+    async def delete_chunks_by_domain_id(self, domain_id: str):
+        """Delete all Qdrant points belonging to a specific domain."""
+        @qdrant_retry
+        async def _call_delete():
+            return await self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=FilterSelector(
+                    filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="domain_id",
+                                match=MatchValue(value=domain_id)
                             )
                         ]
                     )
@@ -179,7 +243,10 @@ class QdrantService:
             if skip_faq:
                 return []
                 
-            faq_must = [FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))]
+            faq_must = [
+                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                FieldCondition(key="is_active", match=MatchValue(value=True))
+            ]
 
             if category_ids:
                 faq_must.append(
@@ -239,6 +306,7 @@ class QdrantService:
                     FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
                     FieldCondition(key="domain_id", match=MatchValue(value=domain_id)),
                     FieldCondition(key="source_type", match=MatchValue(value="document")),
+                    FieldCondition(key="is_active", match=MatchValue(value=True)),
                 ]
             )
             
@@ -332,7 +400,10 @@ class QdrantService:
             return {}
             
         final_filter = Filter(
-            must=[FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))],
+            must=[
+                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)),
+                FieldCondition(key="is_active", match=MatchValue(value=True))
+            ],
             should=should_conditions
         )
         

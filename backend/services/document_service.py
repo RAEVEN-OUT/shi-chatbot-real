@@ -333,7 +333,8 @@ async def ingest_document(
             "filename": filename,
             "source_title": source_title,
             "created_at": now_iso,
-            "text": chunk
+            "text": chunk,
+            "is_active": True
         }
         
         point_id = str(uuid.uuid4())

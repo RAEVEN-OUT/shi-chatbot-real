@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from typing import List, Optional
@@ -6,9 +6,45 @@ from pydantic import BaseModel
 
 from core.firebase_auth import require_subscriber
 from database.database import get_db
-from database.models import FAQCategory, FAQQuestion
+from database.models import FAQCategory, FAQQuestion, DomainCategory
 from services.qdrant_service import qdrant_service
+from services.ollama_service import ollama_service
 from services.audit_service import log_action
+from routers.faq_question_routes import _build_embed_text
+
+async def _reembed_category_background(category_id: str, organization_id: str):
+    from database.database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        stmt = select(FAQQuestion).where(
+            FAQQuestion.faq_id == category_id,
+            FAQQuestion.status == "active"
+        )
+        result = await db.execute(stmt)
+        questions = result.scalars().all()
+        
+        if not questions:
+            return
+            
+        await qdrant_service.ensure_collection()
+        for q in questions:
+            try:
+                text_to_embed = _build_embed_text(q.question, q.answer, q.aliases)
+                vector = await ollama_service.generate_embedding(text_to_embed)
+                await qdrant_service.add_chunk(
+                    tenant_id=organization_id,
+                    domain_id="",
+                    text=text_to_embed,
+                    vector=vector,
+                    metadata={
+                        "category_id": q.faq_id,
+                        "question_id": q.id,
+                        "source_type": "FAQ",
+                        "question": q.question,
+                        "answer": q.answer
+                    }
+                )
+            except Exception as e:
+                print(f"[WARN] Failed to re-embed question {q.id} in background: {e}")
 
 router = APIRouter(prefix="/api/faq-categories", tags=["faq_categories"])
 
@@ -22,7 +58,7 @@ class FAQCategoryUpdate(BaseModel):
 class BulkDeleteRequest(BaseModel):
     category_ids: List[str]
 
-from sqlalchemy import func
+from sqlalchemy import func, delete
 
 @router.get("")
 async def list_faq_categories(
@@ -93,6 +129,7 @@ async def create_faq_category(
 async def update_faq_category(
     category_id: str,
     data: FAQCategoryUpdate,
+    background_tasks: BackgroundTasks,
     user: dict = Depends(require_subscriber),
     db: AsyncSession = Depends(get_db)
 ):
@@ -110,15 +147,34 @@ async def update_faq_category(
         cat.faq_title = data.faq_title
     if data.status is not None:
         cat.status = data.status
-        if data.status in ["inactive", "deleted"]:
+        if data.status == "deleted":
             try:
                 await qdrant_service.delete_chunks_by_category_id(cat.id)
             except Exception as e:
                 print(f"[WARN] Failed to delete Qdrant chunks for category {cat.id}: {e}")
-        # Note: if reactivated to 'active', we would need to re-embed all questions, 
-        # but typically users will manually re-embed or we'll need a background task.
+                raise HTTPException(status_code=500, detail="Failed to delete category in vector store.")
+        elif data.status == "inactive":
+            try:
+                await qdrant_service.set_chunks_active_by_category_id(cat.id, False)
+            except Exception as e:
+                print(f"[WARN] Failed to update Qdrant chunks for category {cat.id}: {e}")
+                raise HTTPException(status_code=500, detail="Failed to disable category in vector store.")
+        elif data.status == "active":
+            try:
+                await qdrant_service.set_chunks_active_by_category_id(cat.id, True)
+            except Exception as e:
+                print(f"[WARN] Failed to update Qdrant chunks for category {cat.id}: {e}")
+                raise HTTPException(status_code=500, detail="Failed to enable category in vector store.")
         
     await db.commit()
+    
+    # Invalidate cache for any domain using this category
+    from database.models import DomainCategory
+    from services.redis_service import redis_service
+    stmt = select(DomainCategory.domain_id).where(DomainCategory.category_id == cat.id)
+    r = await db.execute(stmt)
+    for d_id in r.scalars().all():
+        await redis_service.clear_domain_cache(d_id)
     
     log_action(
         user_uid=user["uid"],
@@ -147,8 +203,11 @@ async def delete_faq_category(
     if not cat:
         raise HTTPException(status_code=404, detail="Category not found")
         
-    # User constraint: use soft deletes
-    cat.status = "inactive"
+    # Manually delete DomainCategory mappings to prevent foreign key violation
+    await db.execute(delete(DomainCategory).where(DomainCategory.category_id == cat.id))
+    
+    # Hard delete category (cascades to questions)
+    await db.delete(cat)
     await db.commit()
 
     try:
@@ -161,7 +220,7 @@ async def delete_faq_category(
         action="DELETE",
         resource_type="FAQ Category",
         resource_id=cat.id,
-        admin_message=f"Deleted (soft) FAQ category '{cat.faq_title}'",
+        admin_message=f"Hard deleted FAQ category '{cat.faq_title}'",
         developer_payload={"category_id": cat.id, "faq_title": cat.faq_title}
     )
 
@@ -181,7 +240,8 @@ async def bulk_delete_categories(
     cats = result.scalars().all()
     
     for c in cats:
-        c.status = "inactive"
+        await db.execute(delete(DomainCategory).where(DomainCategory.category_id == c.id))
+        await db.delete(c)
         try:
             await qdrant_service.delete_chunks_by_category_id(c.id)
         except Exception as e:
@@ -194,7 +254,7 @@ async def bulk_delete_categories(
         action="DELETE",
         resource_type="FAQ Category",
         resource_id="BULK",
-        admin_message=f"Bulk deleted (soft) {len(cats)} FAQ categories",
+        admin_message=f"Bulk hard deleted {len(cats)} FAQ categories",
         developer_payload={"category_ids": [c.id for c in cats]}
     )
     
