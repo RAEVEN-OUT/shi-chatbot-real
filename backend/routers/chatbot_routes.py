@@ -684,7 +684,15 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
         logger.info(base_log)
         background_tasks.add_task(log_failed_question, request.domain_id, request.message, ctx.fallback, fail_reason)
         return None, ChatResponse(answer=ctx.fallback, cached=False, sources=0)
+    logger.warning("TOP SOURCES AFTER EXPANSION")
 
+    for i, src in enumerate(top_sources):
+        logger.warning(
+            f"{i}: "
+            f"type={src.source_type} "
+            f"score={src.score:.3f} "
+            f"question={src.metadata.get('question')}"
+        )
     max_score = top_sources[0].score
     logger.warning(f"TOP SEMANTIC SCORE = {max_score}")
 
