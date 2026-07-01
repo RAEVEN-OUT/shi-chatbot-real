@@ -700,7 +700,14 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     if top_sources[0].source_type == "FAQ" and max_score >= SEMANTIC_FAQ_FAST_PATH_SCORE:
         fast_path_eligible = True
         for src in top_sources[1:]:
-            if src.source_type == "FAQ" and (max_score - src.score) < 0.05:
+            if src.source_type == "FAQ":
+                diff = max_score - src.score
+                logger.warning(
+                    f"COMPETING FAQ score={src.score:.3f} diff={diff:.3f}"
+                )
+
+            if diff < 0.05:
+                logger.warning("FAST PATH REJECTED - competing FAQ")
                 fast_path_eligible = False
                 break
 
