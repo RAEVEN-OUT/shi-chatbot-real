@@ -682,13 +682,15 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
             return None, ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
 
     if max_score < LOW_CONFIDENCE_SCORE:
-        base_log["reason"] = "low semantic score"
-        base_log["score"] = max_score
-        logger.info(base_log)
-        background_tasks.add_task(log_failed_question, request.domain_id, request.message, ctx.fallback, "low semantic score")
-        logger.warning(
-    f"LOW SCORE FALLBACK: score={max_score}, threshold={LOW_CONFIDENCE_SCORE}"
-    )
+
+        if faq_count > 0:
+            logger.warning(
+                "LOW SEMANTIC SCORE BUT FAQ EXISTS - CONTINUING TO LLM"
+            )
+        else:
+            logger.warning(
+            "LOW SCORE FALLBACK"
+        )
         return None, ChatResponse(answer=ctx.fallback, cached=False, sources=len(top_sources))
 
     return RetrievalResult(
