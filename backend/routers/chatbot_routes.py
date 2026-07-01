@@ -506,6 +506,10 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_
         fts_chunks = []
     metrics.record("fts_retrieval", t0)
     logger.warning(f"FTS returned {len(fts_chunks)} FAQs")
+    for f in fts_chunks:
+        logger.warning(
+            f"FTS -> score={f.score:.3f} question={f.metadata.get('question')}"
+        )
     
     if fts_chunks:
         metrics.analytics["fts_hit"] = True
@@ -576,6 +580,12 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
         qdrant_chunks = []
     metrics.record("qdrant_retrieval", t0)
     logger.warning(f"Qdrant returned {len(qdrant_chunks)} chunks")
+    for q in qdrant_chunks:
+        logger.warning(
+            f"QDRANT -> score={q.score:.3f} "
+            f"type={q.source_type} "
+            f"question={q.metadata.get('question')}"
+        )
 
     def _normalize_for_dedup(t: str) -> str:
         return re.sub(r'[\W_]+', '', (t or "").lower())
