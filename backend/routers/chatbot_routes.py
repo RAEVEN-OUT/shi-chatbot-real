@@ -682,7 +682,7 @@ async def _build_context_and_call_llm(
     cache_key: str, 
     background_tasks: BackgroundTasks, 
     metrics: PerformanceMetrics,
-    stream_callback: Optional[Callable[[str], Awaitable[None]]] = None
+    stream: bool = False
 ) -> ChatResponse:
     """Assemble final context, apply intent-based templates, and generate the final LLM output."""
     t0 = time.perf_counter()
@@ -753,12 +753,12 @@ async def _build_context_and_call_llm(
     start_time = time.time()
     t0 = time.perf_counter()
     try:
-        if stream_callback:
+        if stream:
             raw_answer = ""
             async for token in ollama_service.generate_response_stream(system_prompt=system_prompt, user_query=request.message):
                 if token:
                     raw_answer += token
-                    await stream_callback(token)
+                    yield {"type": "token", "content": token}
             answer = _validate_and_clean_response(_strip_preamble(raw_answer), ctx.fallback)
         else:
             raw_answer = await ollama_service.generate_response(system_prompt=system_prompt, user_query=request.message)
@@ -805,16 +805,15 @@ async def _build_context_and_call_llm(
     }
     logger.info(base_log)
 
-    return ChatResponse(answer=answer, cached=False, sources=len(result.sources))
+    if stream:
+        yield {"type": "result", "content": ChatResponse(answer=answer, cached=False, sources=len(result.sources))}
+    else:
+        yield ChatResponse(answer=answer, cached=False, sources=len(result.sources))
 
-# --- Orchestrator ---
-
-@router.post("/ask")
-async def ask_chatbot(
-    request: ChatRequest,
+# --- Orchestrator -async def ask_chatbot_stream(
+    request: 'ChatRequest',
     background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-    stream_callback: Optional[Callable[[str], Awaitable[None]]] = None
+    db: AsyncSession
 ):
     metrics = PerformanceMetrics()
     
@@ -830,11 +829,13 @@ async def ask_chatbot(
     
     cached_resp = await _try_cache(cache_key, request.domain_id, metrics)
     if cached_resp:
-        return _finalize_response(cached_resp, request, metrics, normalized_q, "cache", background_tasks)
+        yield {"type": "result", "content": _finalize_response(cached_resp, request, metrics, normalized_q, "cache", background_tasks)}
+        return
 
     intent_resp = await _handle_intent(request, normalized_q, ctx, cache_key, background_tasks, metrics)
     if intent_resp:
-        return _finalize_response(intent_resp, request, metrics, normalized_q, "intent_faq", background_tasks)
+        yield {"type": "result", "content": _finalize_response(intent_resp, request, metrics, normalized_q, "intent_faq", background_tasks)}
+        return
 
     resolved_query = await _maybe_rewrite_query(normalized_q, history, metrics)
     
@@ -848,23 +849,46 @@ async def ask_chatbot(
         cache_key = f"chat:{request.domain_id}:{q_hash}"
         cached_resp = await _try_cache(cache_key, request.domain_id, metrics, metric_key="cache_lookup_after_rewrite")
         if cached_resp:
-            return _finalize_response(cached_resp, request, metrics, normalized_q, "cache_after_rewrite", background_tasks)
+            yield {"type": "result", "content": _finalize_response(cached_resp, request, metrics, normalized_q, "cache_after_rewrite", background_tasks)}
+            return
 
     fts_resp = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
     if fts_resp:
-        return _finalize_response(fts_resp, request, metrics, normalized_q, "fts_fast_path", background_tasks)
+        yield {"type": "result", "content": _finalize_response(fts_resp, request, metrics, normalized_q, "fts_fast_path", background_tasks)}
+        return
 
     retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, cache_key, background_tasks, metrics)
     if semantic_resp:
-        scores = {"top_score": retrieval_res.chunks[0].score} if retrieval_res and retrieval_res.chunks else {}
-        return _finalize_response(semantic_resp, request, metrics, normalized_q, "semantic_fast_path", background_tasks, scores)
+        scores = {"top_score": retrieval_res.sources[0].score} if retrieval_res and retrieval_res.sources else {}
+        yield {"type": "result", "content": _finalize_response(semantic_resp, request, metrics, normalized_q, "semantic_fast_path", background_tasks, scores)}
+        return
 
-    final_resp = await _build_context_and_call_llm(
-        request, current_topic, ctx, history, retrieval_res, cache_key, background_tasks, metrics, stream_callback
-    )
+    final_resp = None
+    async for chunk in _build_context_and_call_llm(
+        request, current_topic, ctx, history, retrieval_res, cache_key, background_tasks, metrics, stream=True
+    ):
+        if hasattr(chunk, "get"):
+            if chunk.get("type") == "token":
+                yield chunk
+            elif chunk.get("type") == "result":
+                final_resp = chunk["content"]
+        else:
+            final_resp = chunk
     
-    scores = {"top_score": retrieval_res.chunks[0].score} if retrieval_res and retrieval_res.chunks else {}
-    return _finalize_response(final_resp, request, metrics, normalized_q, "llm_generation", background_tasks, scores)
+    scores = {"top_score": retrieval_res.sources[0].score} if retrieval_res and retrieval_res.sources else {}
+    yield {"type": "result", "content": _finalize_response(final_resp, request, metrics, normalized_q, "llm_generation", background_tasks, scores)}
+
+@router.post("/ask")
+async def ask_chatbot_rest(
+    request: 'ChatRequest',
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db)
+):
+    final_result = None
+    async for chunk in ask_chatbot_stream(request, background_tasks, db):
+        if chunk["type"] == "result":
+            final_result = chunk["content"]
+    return final_result
 
 @router.post("/debug")
 async def debug_chatbot(
@@ -945,8 +969,8 @@ async def debug_chatbot(
 
     retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, cache_key, background_tasks, metrics)
     if retrieval_res:
-        debug_info["semantic_retrieval_results"] = [c.dict() for c in retrieval_res.chunks]
-        debug_info["selected_context"] = "\n\n".join([c.content for c in retrieval_res.chunks])
+        debug_info["semantic_retrieval_results"] = [c.dict() for c in retrieval_res.sources]
+        debug_info["selected_context"] = "\n\n".join([c.content for c in retrieval_res.sources])
         
     if semantic_resp:
         debug_info["final_answer"] = semantic_resp.answer

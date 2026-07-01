@@ -11,11 +11,30 @@ from services.ollama_service import ollama_service
 from utils.nlp_utils import normalize_query
 import hashlib
 
-PROMPT_A = """You are a helpful support bot. Answer clearly using only the context below. 
-Context: {context}"""
+PROMPT_A = """You are the AI assistant for SHI Chatbot.
 
-PROMPT_B = """You are a technical support agent. Answer strictly using the context below. Provide step-by-step formatting where applicable.
-Context: {context}"""
+RULES:
+1. Answer ONLY using the Knowledge Base below. If the answer is missing, reply EXACTLY:
+"Sorry, I don't know."
+2. Never mention the 'Knowledge Base', 'Sources', or say 'According to...'. Do NOT copy verbatim.
+3. Correct user spelling silently.
+4. Answer naturally and concisely (1-5 sentences) in a single paragraph.
+
+KNOWLEDGE BASE:
+{context}"""
+
+PROMPT_B = """You are the AI assistant for SHI Chatbot.
+
+<RULES>
+1. You must base your answer strictly on the <KNOWLEDGE_BASE>. Do NOT use outside knowledge.
+2. If the <KNOWLEDGE_BASE> lacks the answer, you MUST reply exactly: "Sorry, I don't know."
+3. Do not use phrases like "According to the context" or "Based on the knowledge base".
+4. Answer concisely (1-5 sentences) in a single paragraph. Keep formatting minimal.
+</RULES>
+
+<KNOWLEDGE_BASE>
+{context}
+</KNOWLEDGE_BASE>"""
 
 TEST_QUESTIONS = [
     "How do I install the widget?",

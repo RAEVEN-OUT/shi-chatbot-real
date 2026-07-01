@@ -2,6 +2,7 @@ import redis.asyncio as redis
 from core.config import settings
 import json
 import logging
+from core.retry import redis_read_retry
 
 logger = logging.getLogger("redis_service")
 
@@ -20,8 +21,12 @@ class RedisService:
 
     async def get_cached_response(self, cache_key: str):
         """Retrieve a cached LLM response."""
+        @redis_read_retry
+        async def _call():
+            return await self.redis.get(cache_key)
+
         try:
-            data = await self.redis.get(cache_key)
+            data = await _call()
             if data:
                 return json.loads(data)
         except Exception as e:
@@ -44,17 +49,19 @@ class RedisService:
             if keys:
                 await self.redis.delete(*keys)
 
+    @redis_read_retry
     async def get_cached_embedding(self, text_hash: str):
         """Retrieve a cached embedding vector."""
-        data = await self.redis.get(f"embed:{text_hash}")
+        data = await self.redis.get(f"embed:{settings.OLLAMA_EMBEDDING_MODEL}:{text_hash}")
         if data:
             return json.loads(data)
         return None
         
     async def set_cached_embedding(self, text_hash: str, vector: list[float], expire: int = 86400 * 7):
         """Cache an embedding vector (1 week default)."""
-        await self.redis.set(f"embed:{text_hash}", json.dumps(vector), ex=expire)
+        await self.redis.set(f"embed:{settings.OLLAMA_EMBEDDING_MODEL}:{text_hash}", json.dumps(vector), ex=expire)
 
+    @redis_read_retry
     async def get_domain_categories(self, domain_id: str):
         """Retrieve cached domain category IDs."""
         data = await self.redis.get(f"domain_categories:{domain_id}")
@@ -70,6 +77,7 @@ class RedisService:
         """Invalidate cached domain category IDs."""
         await self.redis.delete(f"domain_categories:{domain_id}")
 
+    @redis_read_retry
     async def get_domain_capabilities(self, domain_id: str):
         """Retrieve cached domain capabilities (has_faqs, has_docs)."""
         data = await self.redis.get(f"domain_cap:{domain_id}")
@@ -93,6 +101,7 @@ class RedisService:
             await self.redis.expire(key, window)
         return count > limit
 
+    @redis_read_retry
     async def get_chat_history(self, session_id: str, limit: int = 5) -> list[dict]:
         """Retrieve recent chat history for a session."""
         if not session_id:

@@ -63,22 +63,28 @@ async def generate_with_model(model_name: str, system_prompt: str, user_query: s
 
 async def ask_llm_judge(question: str, context: str, answer: str):
     eval_prompt = f"""
-    You are an impartial evaluator. Evaluate this AI response.
+    You are an impartial evaluator.
+    Evaluate ONLY according to the provided context.
+    Do NOT prefer longer responses.
+    Do NOT prefer more detailed responses.
+    Ignore writing style unless it affects correctness.
     
     Question: {question}
     Context: {context}
     Answer: {answer}
     
-    Evaluate the following on a scale of 1-10:
-    1. Response Quality (Is it well formatted and accurate?)
-    2. Hallucination Rate (10 = No hallucinations, completely faithful to context. 1 = Completely made up.)
-    3. Retrieval Quality (Did the context contain the answer? 10 = Yes perfectly, 1 = Not at all)
+    Score independently:
+    1. Faithfulness to context (1-10)
+    2. Completeness (1-10)
+    3. Correctness (1-10)
+    4. Conciseness (1-10)
     
-    Output JSON only:
+    Return JSON only in this format:
     {{
-        "response_quality": 8,
-        "hallucination_score": 9,
-        "retrieval_quality": 10
+        "faithfulness": 9,
+        "completeness": 8,
+        "correctness": 10,
+        "conciseness": 7
     }}
     """
     
@@ -152,16 +158,19 @@ async def run_model_benchmark():
             
             model_stats = {
                 "latency_ms": round(lat, 2),
-                "estimated_tokens": tok,
-                "completion_length": len(answer),
-                "response_quality": eval_res.get("response_quality", 0),
-                "hallucination_score": eval_res.get("hallucination_score", 0),
-                "retrieval_quality": eval_res.get("retrieval_quality", 0),
+                "completion_tokens": tok,
+                "retrieved_chunks": len(ret_res.chunks) if ret_res and ret_res.chunks else 0,
+                "cache_hit": False,
+                "fts_hit": False,
+                "faithfulness": eval_res.get("faithfulness", 0),
+                "completeness": eval_res.get("completeness", 0),
+                "correctness": eval_res.get("correctness", 0),
+                "conciseness": eval_res.get("conciseness", 0),
                 "answer": answer
             }
             question_data["models"][model] = model_stats
             
-            print(f"    -> Latency: {lat:.0f}ms | Tokens: {tok} | Qual: {model_stats['response_quality']} | Halluc: {model_stats['hallucination_score']}")
+            print(f"    -> Latency: {lat:.0f}ms | Tokens: {tok} | Chunks: {model_stats['retrieved_chunks']} | Faithfulness: {model_stats['faithfulness']} | Correctness: {model_stats['correctness']}")
             
         results["questions"].append(question_data)
 

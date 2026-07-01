@@ -604,17 +604,8 @@ async def widget_chat_websocket(
             # ── Typing indicator ───────────────────────────────────────────
             await websocket.send_json({"type": "typing"})
             try:
-                from routers.chatbot_routes import ask_chatbot, ChatRequest
+                from routers.chatbot_routes import ask_chatbot_stream, ChatRequest
                 from fastapi import BackgroundTasks
-                
-                streamed = False
-                async def stream_callback(token: str):
-                    nonlocal streamed
-                    streamed = True
-                    try:
-                        await websocket.send_json({"type": "stream_delta", "text": token})
-                    except Exception:
-                        pass
                 
                 bg_tasks = BackgroundTasks()
                 req = ChatRequest(
@@ -623,17 +614,28 @@ async def widget_chat_websocket(
                     message=user_msg
                 )
                 
+                resp_dict = None
+                streamed = False
+                
                 # Fetch DB again to pass to ask_chatbot
                 async with AsyncSessionLocal() as chat_db:
-                    resp_dict = await ask_chatbot(req, bg_tasks, chat_db, stream_callback=stream_callback)
+                    async for chunk in ask_chatbot_stream(req, bg_tasks, chat_db):
+                        if chunk.get("type") == "token":
+                            streamed = True
+                            try:
+                                await websocket.send_json({"type": "stream_delta", "text": chunk.get("content", "")})
+                            except Exception:
+                                pass
+                        elif chunk.get("type") == "result":
+                            resp_dict = chunk.get("content")
                 
-                final_answer = resp_dict.get("answer", "")
+                final_answer = resp_dict.get("answer", "") if resp_dict else ""
                 
                 if streamed:
                     await websocket.send_json({"type": "stream_done"})
                 else:
-                    source = "cache" if resp_dict.get("cached") else "intent"
-                    if resp_dict.get("fast_path"):
+                    source = "cache" if resp_dict and resp_dict.get("cached") else "intent"
+                    if resp_dict and resp_dict.get("fast_path"):
                         source = "fast_path"
                     
                     await websocket.send_json({

@@ -106,13 +106,21 @@ async def health_check(response: Response):
             "redis": "down",
             "qdrant": "down",
             "ollama": "down"
+        },
+        "metadata": {
+            "version": settings.VERSION,
+            "ollama_model": settings.OLLAMA_LLM_MODEL,
+            "embedding_model": settings.OLLAMA_EMBEDDING_MODEL,
+            "redis": settings.REDIS_URL,
+            "qdrant": f"{settings.QDRANT_HOST}:{settings.QDRANT_PORT}"
         }
     }
     
     # Check Postgres
     try:
         async with AsyncSessionLocal() as db:
-            await db.execute(text("SELECT 1"))
+            from core.retry import db_read_execute
+            await db_read_execute(db, text("SELECT 1"))
             health_status["services"]["postgres"] = "up"
     except Exception as e:
         logger.error(f"Postgres health check failed: {e}")
@@ -129,6 +137,7 @@ async def health_check(response: Response):
     health_status["services"]["ollama"] = "up" if ollama_up else "down"
     
     if not (health_status["services"]["postgres"] == "up" and 
+            health_status["services"]["redis"] == "up" and 
             health_status["services"]["qdrant"] == "up" and 
             health_status["services"]["ollama"] == "up"):
         health_status["status"] = "degraded"

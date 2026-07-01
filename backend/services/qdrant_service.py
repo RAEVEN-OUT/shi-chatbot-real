@@ -11,6 +11,7 @@ import hashlib
 import logging
 import asyncio
 import uuid
+from core.retry import qdrant_retry
 
 logger = logging.getLogger("qdrant_service")
 
@@ -164,21 +165,21 @@ class QdrantService:
                 must_not=[FieldCondition(key="source_type", match=MatchValue(value="document"))]
             )
             
-            for attempt in range(2):
-                try:
-                    results = await self.client.search(
-                        collection_name=self.collection_name,
-                        query_vector=query_vector,
-                        query_filter=faq_filter,
-                        limit=limit,
-                        search_params=SearchParams(hnsw_ef=128)
-                    )
-                    break
-                except Exception as e:
-                    if attempt == 1:
-                        logger.error(f"Qdrant FAQ search failed: {e}")
-                        return []
-                    await asyncio.sleep(0.5)
+            @qdrant_retry
+            async def _call_faq():
+                return await self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    query_filter=faq_filter,
+                    limit=limit,
+                    search_params=SearchParams(hnsw_ef=128)
+                )
+
+            try:
+                results = await _call_faq()
+            except Exception as e:
+                logger.error(f"Qdrant FAQ search failed: {e}")
+                return []
 
             sources = []
             for hit in results:
@@ -211,21 +212,21 @@ class QdrantService:
                 ]
             )
             
-            for attempt in range(2):
-                try:
-                    results = await self.client.search(
-                        collection_name=self.collection_name,
-                        query_vector=query_vector,
-                        query_filter=doc_filter,
-                        limit=limit,
-                        search_params=SearchParams(hnsw_ef=128)
-                    )
-                    break
-                except Exception as e:
-                    if attempt == 1:
-                        logger.error(f"Qdrant doc search failed: {e}")
-                        return []
-                    await asyncio.sleep(0.5)
+            @qdrant_retry
+            async def _call_doc():
+                return await self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_vector,
+                    query_filter=doc_filter,
+                    limit=limit,
+                    search_params=SearchParams(hnsw_ef=128)
+                )
+            
+            try:
+                results = await _call_doc()
+            except Exception as e:
+                logger.error(f"Qdrant doc search failed: {e}")
+                return []
                     
             sources = []
             for hit in results:
