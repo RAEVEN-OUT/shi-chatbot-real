@@ -140,9 +140,9 @@ export function DomainManager({ deletingId, domain, domains, setDomains, categor
             {validAssignedCategories.length === 0 ? <div className="text-center py-10 bg-white border border-gray-200 rounded-xl"><p className="text-gray-500 text-sm">No categories assigned</p></div> :
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {[...validAssignedCategories].sort((a, b) => (selectedCats.has(b.id) ? 1 : 0) - (selectedCats.has(a.id) ? 1 : 0)).map(c => (
-                  <div key={c.id} className="flex flex-col p-4 bg-white border border-gray-200 rounded-xl relative">
+                  <div key={c.id} onClick={() => selectNode('category', c.id, c)} className="flex flex-col p-4 bg-white border border-gray-200 rounded-xl relative hover:border-blue-500 transition-colors group shadow-sm cursor-pointer">
                     <div className="absolute top-4 left-4 z-10">
-                      <div onClick={() => setSelectedCats(prev => { const next = new Set(prev); if (next.has(c.id)) next.delete(c.id); else next.add(c.id); return next; })} className="cursor-pointer text-gray-400 hover:text-blue-500">
+                      <div onClick={(e) => { e.stopPropagation(); setSelectedCats(prev => { const next = new Set(prev); if (next.has(c.id)) next.delete(c.id); else next.add(c.id); return next; }); }} className="cursor-pointer text-gray-400 hover:text-blue-500">
                         {selectedCats.has(c.id) ? <CheckSquare className="text-blue-500" size={18} /> : <Square size={18} />}
                       </div>
                     </div>

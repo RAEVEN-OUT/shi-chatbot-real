@@ -361,9 +361,17 @@ async def _load_domain_and_caps(domain_id: str, db: AsyncSession, background_tas
             return caps
         async with AsyncSessionLocal() as s:
             from sqlalchemy import func
-            faq_count = await s.scalar(select(func.count(FAQ.id)).where(FAQ.domain_id == domain_id))
+            faq_count = await s.scalar(
+    select(func.count(FAQQuestion.id))
+    .join(FAQCategory, FAQQuestion.faq_id == FAQCategory.id)
+    .join(DomainCategory, FAQCategory.id == DomainCategory.category_id)
+    .where(DomainCategory.domain_id == domain_id)
+)
             doc_count = await s.scalar(select(func.count(DocumentSource.id)).where(DocumentSource.domain_id == domain_id))
-            caps = {"has_faqs": (faq_count or 0) > 0, "has_docs": (doc_count or 0) > 0}
+            caps = {
+     "has_faqs": faq_count > 0,
+    "has_docs": doc_count > 0,
+}
         background_tasks.add_task(redis_service.set_domain_capabilities, domain_id, caps)
         return caps
 
