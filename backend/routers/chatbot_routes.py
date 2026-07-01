@@ -590,10 +590,9 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     def _normalize_for_dedup(t: str) -> str:
         return re.sub(r'[\W_]+', '', (t or "").lower())
 
-    seen = set()
-    knowledge_sources = []
+    dedup_map = {}
     
-    # Merge Qdrant + FTS chunks (Qdrant first to preserve higher semantic scores for deduplication)
+    # Merge Qdrant + FTS chunks
     all_chunks = fts_chunks + qdrant_chunks
     
     for chunk in all_chunks:
@@ -602,10 +601,11 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
         if not key:
             key = chunk.id
 
-        if key not in seen:
-            seen.add(key)
-            knowledge_sources.append(chunk)
+        # Keep the chunk with the highest score
+        if key not in dedup_map or chunk.score > dedup_map[key].score:
+            dedup_map[key] = chunk
 
+    knowledge_sources = list(dedup_map.values())
     knowledge_sources.sort(key=lambda x: x.score, reverse=True)
     
     t0 = time.perf_counter()
