@@ -59,7 +59,7 @@ router = APIRouter(prefix="/api/chat", tags=["chatbot"])
 # --------------------------------------------------------------------------
 FTS_FAST_PATH_RANK = 0.35        
 SEMANTIC_FAQ_FAST_PATH_SCORE = 0.75  
-LOW_CONFIDENCE_SCORE = 0.60
+MIN_RETRIEVAL_SCORE = 0.35
 
 async def _save_evaluation_metadata(
     session_id: str,
@@ -746,17 +746,24 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
             logger.warning("RETURNING SEMANTIC FAQ FAST PATH")
             return None, ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
 
-    if max_score < LOW_CONFIDENCE_SCORE:
-
-        if faq_count > 0:
-            logger.warning(
-                "LOW SEMANTIC SCORE BUT FAQ EXISTS - CONTINUING TO LLM"
-            )
-        else:
-            logger.warning(
-            "LOW SCORE FALLBACK"
+    if not top_sources or max_score < MIN_RETRIEVAL_SCORE:
+        logger.warning(
+            f"Retrieval rejected\n"
+            f"Top score: {max_score:.3f}\n"
+            f"Below minimum retrieval threshold ({MIN_RETRIEVAL_SCORE})\n"
+            f"Returning fallback"
         )
-            return None, ChatResponse(answer=ctx.fallback, cached=False, sources=len(top_sources))
+        return None, ChatResponse(answer=ctx.fallback, cached=False, sources=len(top_sources))
+
+    best = top_sources[0]
+    logger.warning(
+        f"Semantic retrieval accepted\n"
+        f"score={max_score:.3f}\n"
+        f"type={best.source_type}\n"
+        f"question={best.metadata.get('question')}\n"
+        f"document={best.metadata.get('document_source_id')}\n"
+        f"Proceeding to LLM verification"
+    )
 
     return RetrievalResult(
         sources=top_sources, 
@@ -851,9 +858,9 @@ async def _build_context_and_call_llm(
     system_prompt = (
         f"You are the AI assistant for {ctx.domain.domain_name}.\n\n"
         f"RULES:\n"
-        f"1. Answer ONLY using the Knowledge Base below. If the answer is missing, reply EXACTLY:\n"
+        f"1. Answer ONLY using the Knowledge Base below. If ANY part of the user's question cannot be answered directly from the retrieved context, DO NOT guess. DO NOT infer. DO NOT assume. DO NOT use outside knowledge. Instead reply EXACTLY:\n"
         f"\"{ctx.fallback}\"\n"
-        f"2. Never mention the 'Knowledge Base' or 'Sources'. Preserve the exact factual meaning. Never contradict the retrieved knowledge. Never invent or infer facts. Never change Yes to No or No to Yes. If the source is conditional, preserve the condition exactly. Never answer beyond the retrieved context.\n"
+        f"2. Never mention the 'Knowledge Base' or 'Sources'. Preserve the exact factual meaning. Never contradict the retrieved knowledge. Never change Yes to No or No to Yes. If the source is conditional, preserve the condition exactly. Never answer beyond the retrieved context.\n"
         f"3. Correct user spelling silently.\n"
         f"{specific_rule}\n\n"
         f"{history_text}\n\n"
