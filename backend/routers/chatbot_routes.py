@@ -493,10 +493,10 @@ async def _maybe_rewrite_query(normalized_q: str, chat_history: list, metrics: P
     metrics.record("rewrite_query", t0)
     return resolved_query
 
-async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_topic: str, ctx: DomainContext, cache_key: str, db: AsyncSession, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> Optional[ChatResponse]:
+async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_topic: str, ctx: DomainContext, cache_key: str, db: AsyncSession, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> tuple[Optional[ChatResponse], List[KnowledgeSource]]:
     """Execute a lightweight Postgres Full-Text Search and return early if confidence is very high."""
     if not ctx.has_faqs:
-        return None
+        return None, []
         
     t0 = time.perf_counter()
     try:
@@ -536,11 +536,11 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_
             metrics.record("cache_write", cw_t0)
             if request.session_id:
                 background_tasks.add_task(redis_service.add_to_chat_history, request.session_id, request.message, fast_answer, current_topic)
-            return ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True)
+            return ChatResponse(answer=fast_answer, cached=False, sources=1, fast_path=True), fts_chunks
             
-    return None
+    return None, fts_chunks
 
-async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash: str, ctx: DomainContext, cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> tuple[Optional[RetrievalResult], Optional[ChatResponse]]:
+async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash: str, ctx: DomainContext, fts_chunks: List[KnowledgeSource], cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> tuple[Optional[RetrievalResult], Optional[ChatResponse]]:
     """Perform embedding generation, Qdrant vector search, chunk expansion, and result deduplication."""
     t0 = time.perf_counter()
     query_vector = await redis_service.get_cached_embedding(q_hash)
@@ -576,7 +576,11 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
 
     seen = set()
     knowledge_sources = []
-    for chunk in qdrant_chunks:
+    
+    # Merge Qdrant + FTS chunks (Qdrant first to preserve higher semantic scores for deduplication)
+    all_chunks = fts_chunks + qdrant_chunks
+    
+    for chunk in all_chunks:
         raw_text = chunk.metadata.get("question", "") if chunk.source_type == "FAQ" else chunk.metadata.get("text", "")
         key = _normalize_for_dedup(raw_text)
         if not key:
@@ -911,12 +915,12 @@ async def ask_chatbot_stream(
             yield {"type": "result", "content": _finalize_response(cached_resp, request, metrics, normalized_q, "cache_after_rewrite", background_tasks)}
             return
 
-    fts_resp = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
+    fts_resp, fts_chunks = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
     if fts_resp:
         yield {"type": "result", "content": _finalize_response(fts_resp, request, metrics, normalized_q, "fts_fast_path", background_tasks)}
         return
 
-    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, cache_key, background_tasks, metrics)
+    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, fts_chunks, cache_key, background_tasks, metrics)
     if semantic_resp:
         scores = {"top_score": retrieval_res.sources[0].score} if retrieval_res and retrieval_res.sources else {}
         yield {"type": "result", "content": _finalize_response(semantic_resp, request, metrics, normalized_q, "semantic_fast_path", background_tasks, scores)}
@@ -1025,13 +1029,13 @@ async def debug_chatbot(
         fts_results = await search_faqs_fts(db, request.domain_id, resolved_query, limit=5)
         debug_info["fts_results"] = [c.dict() for c in fts_results]
 
-    fts_resp = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
+    fts_resp, fts_chunks = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
     if fts_resp:
         debug_info["final_answer"] = fts_resp.answer
         debug_info["latency_breakdown"] = metrics.to_dict()
         return debug_info
 
-    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, cache_key, background_tasks, metrics)
+    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, fts_chunks, cache_key, background_tasks, metrics)
     if retrieval_res:
         debug_info["semantic_retrieval_results"] = [c.dict() for c in retrieval_res.sources]
         debug_info["selected_context"] = "\n\n".join([c.content for c in retrieval_res.sources])

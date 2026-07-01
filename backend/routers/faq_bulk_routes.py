@@ -14,6 +14,7 @@ from services.qdrant_service import qdrant_service
 from services.ollama_service import ollama_service
 from services.redis_service import redis_service
 from services.audit_service import log_action
+from routers.faq_question_routes import _build_embed_text
 
 logger = logging.getLogger("chatbot.routers.faq_bulk")
 router = APIRouter(prefix="/api/faq-hierarchy", tags=["FAQ Hierarchy"])
@@ -29,7 +30,7 @@ class BulkFAQRow(BaseModel):
 async def bulk_index_faqs(org_id: str, to_index: List[tuple]):
     """
     Background task to generate embeddings and add to Qdrant for bulk uploaded FAQs.
-    to_index: list of tuples (question_id, category_id, question, answer)
+    to_index: list of tuples (question_id, category_id, question, answer, domain_id)
     """
     try:
         await qdrant_service.ensure_collection()
@@ -37,21 +38,20 @@ async def bulk_index_faqs(org_id: str, to_index: List[tuple]):
         logger.error(f"Failed to ensure Qdrant collection: {e}")
         return
 
-    for q_id, cat_id, question, answer in to_index:
+    for q_id, cat_id, question, answer, domain_id in to_index:
         try:
-            # Build the exact same embed text as the single FAQ path
-            text_to_embed = f"Q: {question}\nA: {answer}"
+            text_to_embed = _build_embed_text(question, answer, [])
             vector = await ollama_service.generate_embedding(text_to_embed)
 
             await qdrant_service.add_chunk(
                 tenant_id=org_id,
-                domain_id=cat_id,  # Matches legacy domain_id = faq_id/category_id in single FAQ route
+                domain_id=domain_id,
                 text=text_to_embed,
                 vector=vector,
                 metadata={
                     "category_id": cat_id,
                     "question_id": q_id,
-                    "type": "faq",
+                    "source_type": "FAQ",
                     "question": question,
                     "answer": answer
                 }
@@ -217,7 +217,7 @@ async def bulk_upload_faq(
                         db.add(new_q)
                         await db.flush()
                         question_cache.add(q_key)
-                        to_index.append((new_q.id, cat.id, question, answer))
+                        to_index.append((new_q.id, cat.id, question, answer, domain.id))
 
                 success_count += 1
         except Exception as e:

@@ -172,7 +172,7 @@ async def create_faq_question(
             metadata={
                 "category_id": new_q.faq_id,
                 "question_id": new_q.id,
-                "type": "faq",
+                "source_type": "FAQ",
                 "question": new_q.question,
                 "answer": new_q.answer
             }
@@ -263,7 +263,7 @@ async def update_faq_question(
                 metadata={
                     "category_id": q.faq_id,
                     "question_id": q.id,
-                    "type": "faq",
+                    "source_type": "FAQ",
                     "question": q.question,
                     "answer": q.answer
                 }
