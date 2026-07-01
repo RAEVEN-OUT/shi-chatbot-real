@@ -518,7 +518,13 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_
             "duration_ms": metrics.metrics.get("fts_retrieval")
         })
 
+    logger.warning(
+        f"FTS TOP SCORE={fts_chunks[0].score if fts_chunks else 'NONE'} "
+        f"THRESHOLD={FTS_FAST_PATH_RANK}"
+    )
+
     if fts_chunks and fts_chunks[0].score >= FTS_FAST_PATH_RANK:
+        logger.warning("FTS FAST PATH TRIGGERED")
         metrics.analytics["fts_fast_path"] = True
         top = fts_chunks[0]
         fast_answer = top.metadata.get("answer")
