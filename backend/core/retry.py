@@ -83,6 +83,7 @@ db_read_retry = retry(**get_retry_config(
 ))
 
 
+
 from sqlalchemy.ext.asyncio import AsyncSession
 @db_read_retry
 async def db_read_execute(db: AsyncSession, stmt):
@@ -91,3 +92,17 @@ async def db_read_execute(db: AsyncSession, stmt):
 @db_read_retry
 async def db_read_scalar(db: AsyncSession, stmt):
     return await db.scalar(stmt)
+
+# 5. DB Write Retry (Use ONLY for startup/stateless jobs!)
+db_write_retry = retry(**get_retry_config(
+    "DB_WRITE",
+    (SQLAlchemyOperationalError,)
+))
+
+@db_write_retry
+async def db_write_execute(db: AsyncSession, stmt):
+    return await db.execute(stmt)
+
+@db_write_retry
+async def db_write_commit(db: AsyncSession):
+    return await db.commit()

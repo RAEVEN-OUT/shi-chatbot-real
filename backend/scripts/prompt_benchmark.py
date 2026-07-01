@@ -82,12 +82,13 @@ async def ask_llm_judge(question: str, context: str, answer_a: str, answer_b: st
             user_query=eval_prompt
         )
         
-        # Strip potential markdown formatting
         resp_text = resp_text.strip()
-        if resp_text.startswith("```json"):
-            resp_text = resp_text[7:-3].strip()
-        elif resp_text.startswith("```"):
-            resp_text = resp_text[3:-3].strip()
+        
+        # Find first { and last } to handle preamble text or markdown
+        start_idx = resp_text.find('{')
+        end_idx = resp_text.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+            resp_text = resp_text[start_idx:end_idx+1]
             
         return json.loads(resp_text)
     except Exception as e:

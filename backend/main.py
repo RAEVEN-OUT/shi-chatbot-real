@@ -14,6 +14,7 @@ async def lifespan(app: FastAPI):
         from database.models import DocumentSource
         from sqlalchemy import update
         
+        from core.retry import db_write_execute, db_write_commit
         async with AsyncSessionLocal() as db:
             # If the server crashed during an upload, mark stranded docs as failed
             stmt = (
@@ -25,8 +26,8 @@ async def lifespan(app: FastAPI):
                     error_message="Server restarted during processing. Please try again."
                 )
             )
-            result = await db.execute(stmt)
-            await db.commit()
+            result = await db_write_execute(db, stmt)
+            await db_write_commit(db)
             if result.rowcount > 0:
                 logger.warning(f"Hardening: Cleaned up {result.rowcount} stranded documents.")
     except Exception as e:

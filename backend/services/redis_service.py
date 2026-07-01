@@ -131,9 +131,18 @@ class RedisService:
     async def is_rate_limited(self, widget_key: str, session_id: str, ip: str, limit: int = 100, window: int = 60) -> bool:
         """Check if client is rate limited."""
         key = f"rate:{widget_key}:{session_id}:{ip}"
-        count = await self.redis.incr(key)
+        
+        @redis_write_retry
+        async def _call_incr():
+            return await self.redis.incr(key)
+            
+        @redis_write_retry
+        async def _call_expire():
+            return await self.redis.expire(key, window)
+            
+        count = await _call_incr()
         if count == 1:
-            await self.redis.expire(key, window)
+            await _call_expire()
         return count > limit
 
     @redis_read_retry

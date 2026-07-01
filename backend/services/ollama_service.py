@@ -76,6 +76,39 @@ class OllamaService:
         data = response.json()
         return data.get("message", {}).get("content", "").strip()
 
+    @ollama_retry
+    async def _rewrite_request(self, system_prompt: str, prompt: str, current_query: str) -> str:
+        response = await self.client.post(
+            f"{self.base_url}/api/chat",
+            json={
+                "model": self.llm_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "stream": False,
+                "think": False,
+                "options": {
+                    "num_ctx": 4096,
+                    "temperature": 0.0,
+                    "top_p": 0.8,
+                    "repeat_penalty": 1.05,
+                    "num_predict": 64,
+                    "seed": 42
+                }
+            }
+        )
+
+        response.raise_for_status()
+        data = response.json()
+        return data.get("message", {}).get("content", current_query).strip()
+
     async def rewrite_query(
         self,
         chat_history: list[dict],
@@ -107,44 +140,22 @@ class OllamaService:
             f"{current_query}"
         )
 
-        @ollama_retry
-        async def _call_api():
-            response = await self.client.post(
-                f"{self.base_url}/api/chat",
-                json={
-                    "model": self.llm_model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": system_prompt
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ],
-                    "stream": False,
-                    "think": False,
-                    "options": {
-        "num_ctx": 4096,
-        "temperature": 0.0,
-        "top_p": 0.8,
-        "repeat_penalty": 1.05,
-        "num_predict": 64,
-        "seed": 42
-    }
-                }
-            )
-
-            response.raise_for_status()
-            data = response.json()
-            return data.get("message", {}).get("content", current_query).strip()
-
         try:
-            return await _call_api()
+            return await self._rewrite_request(system_prompt, prompt, current_query)
         except Exception as e:
             logger.warning(f"Ollama rewrite failed after retries: {e}. Falling back to original query.")
             return current_query
+
+    @ollama_retry
+    async def _open_stream_request(self, payload: dict):
+        request = self.client.build_request(
+            "POST",
+            f"{self.base_url}/api/chat",
+            json=payload
+        )
+        response = await self.client.send(request, stream=True)
+        response.raise_for_status()
+        return response
 
     async def generate_response_stream(
         self,
@@ -184,19 +195,8 @@ class OllamaService:
             }
         }
 
-        @ollama_retry
-        async def _open_stream():
-            request = self.client.build_request(
-                "POST",
-                f"{self.base_url}/api/chat",
-                json=payload
-            )
-            response = await self.client.send(request, stream=True)
-            response.raise_for_status()
-            return response
-
         try:
-            response = await _open_stream()
+            response = await self._open_stream_request(payload)
         except Exception as e:
             logger.error(f"Failed to open Ollama stream: {e}")
             return
