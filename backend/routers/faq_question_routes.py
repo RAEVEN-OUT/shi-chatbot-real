@@ -161,6 +161,7 @@ async def create_faq_question(
     # FIX #1: embed Q+A together
     try:
         await qdrant_service.ensure_collection()
+        await qdrant_service.delete_chunks_by_question_id(new_q.id)
         text_to_embed = _build_embed_text(new_q.question, new_q.answer, new_q.aliases)
         vector = await ollama_service.generate_embedding(text_to_embed)
 
@@ -174,7 +175,9 @@ async def create_faq_question(
                 "question_id": new_q.id,
                 "source_type": "FAQ",
                 "question": new_q.question,
-                "answer": new_q.answer
+                "answer": new_q.answer,
+                "aliases": new_q.aliases or [],
+                "is_active": True
             }
         )
     except Exception as e:
@@ -265,7 +268,9 @@ async def update_faq_question(
                     "question_id": q.id,
                     "source_type": "FAQ",
                     "question": q.question,
-                    "answer": q.answer
+                    "answer": q.answer,
+                    "aliases": q.aliases or [],
+                    "is_active": True
                 }
             )
         except Exception as e:

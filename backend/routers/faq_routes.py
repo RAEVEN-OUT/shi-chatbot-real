@@ -44,12 +44,21 @@ async def create_faq(faq_data: FAQCreate, background_tasks: BackgroundTasks, db:
         
         # 4. Insert into Qdrant knowledge_chunks
         await qdrant_service.ensure_collection()
+        await qdrant_service.delete_chunks_by_question_id(str(new_faq.id))
         await qdrant_service.add_chunk(
             tenant_id=tenant_id,
             domain_id=faq_data.domain_id,
             text=chunk_text,
             vector=vector,
-            metadata={"source_type": "faq", "faq_id": new_faq.id, "question": faq_data.question, "answer": faq_data.answer}
+            metadata={
+                "category_id": "",
+                "question_id": str(new_faq.id),
+                "source_type": "FAQ",
+                "question": faq_data.question,
+                "answer": faq_data.answer,
+                "aliases": [],
+                "is_active": True
+            }
         )
     except Exception as e:
         # If Qdrant/Ollama fails, rollback might be necessary, but for now we just return the error.

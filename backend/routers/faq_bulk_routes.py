@@ -40,6 +40,7 @@ async def bulk_index_faqs(org_id: str, to_index: List[tuple]):
 
     for q_id, cat_id, question, answer, domain_id in to_index:
         try:
+            await qdrant_service.delete_chunks_by_question_id(q_id)
             text_to_embed = _build_embed_text(question, answer, [])
             vector = await ollama_service.generate_embedding(text_to_embed)
 
@@ -53,7 +54,9 @@ async def bulk_index_faqs(org_id: str, to_index: List[tuple]):
                     "question_id": q_id,
                     "source_type": "FAQ",
                     "question": question,
-                    "answer": answer
+                    "answer": answer,
+                    "aliases": [],
+                    "is_active": True
                 }
             )
         except Exception as e:
