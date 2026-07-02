@@ -83,6 +83,26 @@ export default function FaqsTab({ domain }) {
     const title = (cat.faq_title || '').toLowerCase();
     const q = search.toLowerCase();
     return title.includes(q);
+  }).sort((a, b) => {
+    const isAssignedA = assignedCategoryIds.includes(a.id);
+    const isAssignedB = assignedCategoryIds.includes(b.id);
+    
+    const isActiveA = a.status !== 'inactive';
+    const isActiveB = b.status !== 'inactive';
+    
+    const groupA = (isActiveA ? 0 : 2) + (isAssignedA ? 0 : 1);
+    const groupB = (isActiveB ? 0 : 2) + (isAssignedB ? 0 : 1);
+    
+    if (groupA !== groupB) {
+      return groupA - groupB;
+    }
+    
+    const titleA = (a.faq_title || '').toLowerCase();
+    const titleB = (b.faq_title || '').toLowerCase();
+    
+    if (titleA < titleB) return -1;
+    if (titleA > titleB) return 1;
+    return 0;
   });
 
   const activeCategories = allCategories.filter(c => c.status !== 'inactive');
