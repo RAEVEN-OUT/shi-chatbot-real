@@ -102,7 +102,7 @@ export default function SupportChat() {
       </div>
 
       <div className="flex-1 bg-white border border-gray-200 rounded-2xl flex flex-col overflow-hidden shadow-2xl relative">
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-4 custom-scrollbar">
           {messages.length === 0 && (
             <div className="h-full flex items-center justify-center text-gray-500 flex-col gap-2">
               <MessageCircle size={32} />
@@ -112,13 +112,13 @@ export default function SupportChat() {
           {messages.map((msg, idx) => {
             const isMe = msg.sender_role === 'subscriber';
             return (
-              <div key={idx} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[70%] rounded-2xl px-4 py-3 ${isMe ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border-gray-200 text-gray-800 rounded-bl-none border border-gray-200'}`}>
+              <div key={idx} className={`flex w-full ${isMe ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[75%] min-w-0 rounded-2xl px-4 py-3 ${isMe ? 'bg-blue-600 text-white rounded-br-none' : 'bg-white border-gray-200 text-gray-800 rounded-bl-none border border-gray-200'}`}>
                     <div className="flex items-center gap-2 mb-1 opacity-70">
                       <User size={12} />
                       <span className="text-[10px] uppercase font-bold tracking-wider">{msg.sender_role}</span>
                     </div>
-                    <p className="text-sm break-words whitespace-pre-wrap">{msg.text}</p>
+                    <p className="text-sm" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}}>{msg.text}</p>
                     {msg.timestamp && (
                       <p className="text-[9px] opacity-60 mt-2 text-right">
                         {formatTime(msg.timestamp, userData?.custom_time_stamp)}

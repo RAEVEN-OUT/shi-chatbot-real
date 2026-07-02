@@ -617,10 +617,10 @@ export default function Conversations() {
               <p className="text-gray-500 text-sm font-medium">Loading conversation...</p>
             </div>
           ) : selectedSession ? (
-            <div className="flex-1 flex flex-col lg:flex-row min-h-0">
+            <div className="flex-1 flex flex-col lg:flex-row min-h-0 min-w-0">
 
               {/* CHAT LOG STREAM */}
-              <div className="flex-1 flex flex-col min-h-0">
+              <div className="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
                 {/* Header */}
                 <div className="p-3 md:p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
                   <div className="flex items-center gap-2">
@@ -706,7 +706,7 @@ export default function Conversations() {
                 </div>
 
                 {/* Messages stream */}
-                <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 flex flex-col bg-gray-50">
+                <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 space-y-4 flex flex-col bg-gray-50 w-full">
                   {selectedSession.messages_json?.map((msg, idx, arr) => {
                     const isCustomer = msg.sender === 'customer' || msg.sender === 'user';
                     const isSystem = msg.sender === 'system';
@@ -743,16 +743,17 @@ export default function Conversations() {
                       msgContent = (
                         <div
                           key={msg.id || idx}
-                          className={`flex flex-col max-w-[85%] md:max-w-[70%] ${isCustomer ? 'self-start items-start' : 'self-end items-end'}`}
+                          className={`flex flex-col w-fit max-w-[80%] min-w-0 ${isCustomer ? 'self-start items-start' : 'self-end items-end'}`}
                         >
                           <div
-                            className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed break-words whitespace-pre-wrap ${
+                            className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed break-all overflow-wrap-anywhere min-w-0 overflow-hidden ${
                               isCustomer
                                 ? 'bg-white border border-gray-200 text-gray-800 rounded-bl-none shadow-sm'
                                 : isAI
                                 ? 'bg-blue-600 text-white rounded-br-none shadow-md shadow-blue-600/10'
                                 : 'bg-indigo-600 text-white rounded-br-none shadow-md shadow-indigo-600/10'
                             }`}
+                            style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}}
                           >
                             {msg.message}
                           </div>
