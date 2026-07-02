@@ -12,6 +12,7 @@ export default function Analytics() {
     totalQueries: 0,
     faqResolved: 0,
     aiResolved: 0,
+    humanResolved: 0,
     failedQsCount: 0,
     spamCount: 0,
     totalLeads: 0,
@@ -42,7 +43,7 @@ export default function Analytics() {
     return <div className="text-gray-500 p-8">Loading analytics reports...</div>;
   }
 
-  const { totalQueries, faqResolved, aiResolved, failedQsCount, spamCount, totalLeads } = summary;
+  const { totalQueries, faqResolved, aiResolved, humanResolved, failedQsCount, spamCount, totalLeads } = summary;
   const totalInteractions = totalQueries + failedQsCount;
   
   const successRate = totalInteractions > 0 
@@ -130,6 +131,16 @@ export default function Analytics() {
               </div>
               <div className="w-full bg-white border-gray-200 rounded-full h-2">
                 <div className="bg-red-500 h-2 rounded-full" style={{ width: `${totalQueries > 0 ? (spamCount/totalQueries)*100 : 0}%` }}></div>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-sm mb-1.5">
+                <span className="text-gray-500">Human Resolved (Admin Messages)</span>
+                <span className="text-gray-900 font-bold">{humanResolved}</span>
+              </div>
+              <div className="w-full bg-white border-gray-200 rounded-full h-2">
+                <div className="bg-orange-500 h-2 rounded-full" style={{ width: `${totalQueries > 0 ? (humanResolved/totalQueries)*100 : 0}%` }}></div>
               </div>
             </div>
           </div>

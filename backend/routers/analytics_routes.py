@@ -43,19 +43,21 @@ async def get_analytics_summary(
     )
     total_queries = await db.scalar(query_stmt) or 0
     
-    # Resolutions
-    res_stmt = select(ChatSession.resolution_type, func.count(ChatSession.id)).where(
-        ChatSession.domain_id.in_(allowed_domains)
-    ).group_by(ChatSession.resolution_type)
-    res_result = await db.execute(res_stmt)
+    from database.models import EvaluationMetadata
     
+    # Resolutions based on actual query retrieval paths
+    eval_stmt = select(EvaluationMetadata.retrieval_path, func.count(EvaluationMetadata.id)).where(
+        EvaluationMetadata.domain_id.in_(allowed_domains)
+    ).group_by(EvaluationMetadata.retrieval_path)
+    eval_result = await db.execute(eval_stmt)
+    
+    faq_resolved = 0
     ai_resolved = 0
-    human_resolved = 0
-    for res_type, count in res_result.all():
-        if res_type == 'AI':
+    for path, count in eval_result.all():
+        if path in ['fts_fast_path', 'semantic_fast_path']:
+            faq_resolved += count
+        elif path == 'llm_generation':
             ai_resolved += count
-        elif res_type == 'HUMAN':
-            human_resolved += count
             
     # Failed Questions
     fail_stmt = select(func.count(FailedQuestion.id)).where(
@@ -71,6 +73,13 @@ async def get_analytics_summary(
     )
     spam_count = await db.scalar(spam_stmt) or 0
     
+    # Admin Messages (Human Responses)
+    admin_msg_stmt = select(func.count(ChatMessage.id)).join(ChatSession).where(
+        ChatSession.domain_id.in_(allowed_domains),
+        ChatMessage.sender == 'admin'
+    )
+    human_resolved = await db.scalar(admin_msg_stmt) or 0
+    
     # Leads
     lead_stmt = select(func.count(Lead.id)).where(
         Lead.domain_id.in_(allowed_domains)
@@ -79,8 +88,9 @@ async def get_analytics_summary(
     
     return {
         "totalQueries": total_queries,
-        "faqResolved": human_resolved,
+        "faqResolved": faq_resolved,
         "aiResolved": ai_resolved,
+        "humanResolved": human_resolved,
         "failedQsCount": failed_questions,
         "spamCount": int(spam_count),
         "totalLeads": total_leads,
@@ -89,7 +99,7 @@ async def get_analytics_summary(
         # Retain snake_case for backward compatibility
         "total_queries": total_queries,
         "ai_resolved": ai_resolved,
-        "human_resolved": human_resolved,
+        "human_resolved": faq_resolved,
         "failed_questions": failed_questions,
         "spam_count": int(spam_count),
         "total_leads": total_leads
