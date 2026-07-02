@@ -178,7 +178,7 @@ export default function FaqsTab({ domain }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       <Tag size={14} className="text-purple-400 shrink-0" />
-                      <span title={category.faq_title} className="font-bold text-sm text-gray-900 truncate">{category.faq_title}</span>
+                      <span title={category.faq_title} className="font-bold text-sm text-gray-900 break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}}>{category.faq_title}</span>
                       {isInactive && (
                         <span className="text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-md font-bold uppercase tracking-wider">
                           Inactive

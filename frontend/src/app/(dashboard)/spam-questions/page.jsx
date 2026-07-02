@@ -177,7 +177,7 @@ export default function SpamQuestions() {
                         />
                       </td>
                       <td className="p-4">
-                        <p className="text-sm font-medium text-gray-500 max-w-sm truncate" title={s.customer_question}>{s.customer_question}</p>
+                        <p className="text-sm font-medium text-gray-500 max-w-sm break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}} title={s.customer_question}>{s.customer_question}</p>
                       </td>
                       <td className="p-4 text-sm text-gray-700">
                         {domainName}

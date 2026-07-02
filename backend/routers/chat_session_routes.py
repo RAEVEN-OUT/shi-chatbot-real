@@ -120,6 +120,22 @@ async def get_session(
     if session.unread_admin and session.unread_admin > 0:
         session.unread_admin = 0
         await db.commit()
+        try:
+            now_iso = datetime.datetime.utcnow().isoformat()
+            payload = {
+                "type": "message",
+                "message": {
+                    "id": "read-event",
+                    "session_id": session_id,
+                    "sender": "admin",
+                    "message": "read",
+                    "type": "system",
+                    "created_at": now_iso
+                }
+            }
+            await redis_service.publish_message(f"chat:{session_id}", payload)
+        except Exception as e:
+            pass
 
     return {
         "id": session.id,
@@ -289,6 +305,22 @@ async def mark_session_read(
     if session:
         session.unread_admin = 0
         await db.commit()
+        try:
+            now_iso = datetime.datetime.utcnow().isoformat()
+            payload = {
+                "type": "message",
+                "message": {
+                    "id": "read-event",
+                    "session_id": session_id,
+                    "sender": "admin",
+                    "message": "read",
+                    "type": "system",
+                    "created_at": now_iso
+                }
+            }
+            await redis_service.publish_message(f"chat:{session_id}", payload)
+        except Exception as e:
+            pass
 
     return {"status": "success"}
 
@@ -306,6 +338,22 @@ async def delete_session(
     if session:
         await db.delete(session)
         await db.commit()
+        try:
+            now_iso = datetime.datetime.utcnow().isoformat()
+            payload = {
+                "type": "message",
+                "message": {
+                    "id": "delete-event",
+                    "session_id": session_id,
+                    "sender": "system",
+                    "message": "deleted",
+                    "type": "system",
+                    "created_at": now_iso
+                }
+            }
+            await redis_service.publish_message(f"chat:{session_id}", payload)
+        except Exception as e:
+            pass
 
     return {"status": "success"}
 
@@ -324,6 +372,23 @@ async def bulk_delete_sessions(
         await db.delete(s)
 
     await db.commit()
+    try:
+        now_iso = datetime.datetime.utcnow().isoformat()
+        for s_id in data.session_ids:
+            payload = {
+                "type": "message",
+                "message": {
+                    "id": "delete-event",
+                    "session_id": s_id,
+                    "sender": "system",
+                    "message": "deleted",
+                    "type": "system",
+                    "created_at": now_iso
+                }
+            }
+            await redis_service.publish_message(f"chat:{s_id}", payload)
+    except Exception as e:
+        pass
     return {"status": "success", "deleted_count": len(sessions)}
 
 

@@ -7,7 +7,7 @@ import { failedQuestionService } from '@/services/failedQuestionService';
 import { faqQuestionService } from '@/services/faqQuestionService';
 import { domainService } from '@/services/domainService';
 import { faqCategoryService } from '@/services/faqCategoryService';
-import { BrainCircuit, Search, ChevronLeft, ChevronRight, CheckCircle, ShieldAlert, Trash2, X, Plus, ExternalLink, Activity, Loader2, Globe, Tag } from 'lucide-react';
+import { BrainCircuit, Search, ChevronLeft, ChevronRight, CheckCircle, ShieldAlert, Trash2, X, Plus, ExternalLink, Activity, Loader2, Globe, Tag, Info } from 'lucide-react';
 import { TableSkeleton } from '@/components/loaders/Skeletons';
 import { useToast } from '@/contexts/ToastContext';
 import { confirmAction } from '@/utils/confirm';
@@ -45,6 +45,7 @@ export default function FailedQuestions() {
   
   const [selectedQuestions, setSelectedQuestions] = useState(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [activeActionsQuestion, setActiveActionsQuestion] = useState(null);
 
   const fetchStaticData = async () => {
     try {
@@ -295,9 +296,7 @@ export default function FailedQuestions() {
                   <th className="p-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">AI Response</th>
                   <th className="p-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
                   <th className="p-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Created Time</th>
-                  <th className="p-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">Promote</th>
-                  <th className="p-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">Spam</th>
-                  <th className="p-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">Delete</th>
+                  <th className="p-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center w-24">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -315,7 +314,7 @@ export default function FailedQuestions() {
                         />
                       </td>
                       <td className="p-4">
-                        <p className="text-sm font-medium text-gray-900 max-w-sm truncate" title={q.customer_question || q.query}>{q.customer_question || q.query}</p>
+                        <p className="text-sm font-medium text-gray-900 max-w-sm break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}} title={q.customer_question || q.query}>{q.customer_question || q.query}</p>
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-1.5 text-xs text-gray-500 bg-white border-gray-200 px-2 py-1 rounded-md w-fit max-w-[120px] truncate" title={domainName}>
@@ -323,7 +322,7 @@ export default function FailedQuestions() {
                           <span className="truncate">{domainName.replace(/^https?:\/\//, '')}</span>
                         </div>
                       </td>
-                      <td className="p-4 text-sm text-gray-500 max-w-xs truncate" title={q.ai_response || q.failed_response}>
+                      <td className="p-4 text-sm text-gray-500 max-w-xs break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}} title={q.ai_response || q.failed_response}>
                         {q.ai_response || q.failed_response}
                       </td>
                       <td className="p-4">
@@ -340,29 +339,11 @@ export default function FailedQuestions() {
                       </td>
                       <td className="p-4 text-center">
                         <button 
-                          onClick={() => handleOpenPromote(q)}
-                          className="inline-flex items-center justify-center p-2 bg-blue-500/10 hover:bg-blue-500/20 hover:text-blue-400 text-gray-700 rounded-xl transition-colors"
-                          title="Promote to FAQ"
+                          onClick={() => setActiveActionsQuestion(q)}
+                          className="inline-flex items-center justify-center p-2 bg-gray-50 hover:bg-gray-100 hover:text-primary text-gray-500 border border-gray-200 rounded-xl transition-colors"
+                          title="View Actions"
                         >
-                          <BrainCircuit size={16} />
-                        </button>
-                      </td>
-                      <td className="p-4 text-center">
-                        <button 
-                          onClick={() => handleMarkAsSpam(q.id)}
-                          className="inline-flex items-center justify-center p-2 bg-white border-gray-200 hover:bg-orange-500/20 hover:text-orange-400 text-gray-700 rounded-xl transition-colors"
-                          title="Mark as Spam"
-                        >
-                          <ShieldAlert size={16} />
-                        </button>
-                      </td>
-                      <td className="p-4 text-center">
-                        <button 
-                          onClick={() => handleDelete(q.id)}
-                          className="inline-flex items-center justify-center p-2 bg-white border-gray-200 hover:bg-red-500/20 hover:text-gray-500 text-gray-700 rounded-xl transition-colors"
-                          title="Dismiss Log"
-                        >
-                          <Trash2 size={16} />
+                          <Info size={16} />
                         </button>
                       </td>
                     </tr>
@@ -480,6 +461,70 @@ export default function FailedQuestions() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Question Actions Modal */}
+      {activeActionsQuestion && createPortal(
+        <div 
+          className="fixed inset-0 bg-gray-900/40 backdrop-blur-sm z-[999999] flex items-center justify-center p-4 cursor-pointer"
+          onClick={() => setActiveActionsQuestion(null)}
+        >
+          <div 
+            className="bg-white border border-gray-200 w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl cursor-default p-6"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-md font-bold text-gray-900">Manage Failed Question</h3>
+              <button 
+                onClick={() => setActiveActionsQuestion(null)} 
+                className="text-gray-500 hover:text-gray-700 p-1 rounded-xl hover:bg-gray-100 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            
+            <div className="bg-gray-50 p-4 rounded-2xl mb-4 border border-gray-100">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Customer Question</p>
+              <p className="text-sm font-medium text-gray-900 break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}}>
+                "{activeActionsQuestion.customer_question || activeActionsQuestion.query}"
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  handleOpenPromote(activeActionsQuestion);
+                  setActiveActionsQuestion(null);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-600 rounded-2xl text-sm font-bold transition-all"
+              >
+                <BrainCircuit size={18} />
+                Promote to FAQ
+              </button>
+              <button
+                onClick={() => {
+                  handleMarkAsSpam(activeActionsQuestion.id);
+                  setActiveActionsQuestion(null);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-orange-500/10 hover:bg-orange-500/20 text-orange-600 rounded-2xl text-sm font-bold transition-all"
+              >
+                <ShieldAlert size={18} />
+                Mark as Spam
+              </button>
+              <button
+                onClick={() => {
+                  handleDelete(activeActionsQuestion.id);
+                  setActiveActionsQuestion(null);
+                }}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-600 rounded-2xl text-sm font-bold transition-all"
+              >
+                <Trash2 size={18} />
+                Dismiss Log
+              </button>
             </div>
           </div>
         </div>,

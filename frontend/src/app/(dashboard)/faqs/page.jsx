@@ -595,7 +595,7 @@ export default function Faqs() {
                               />
                             </td>
                             <td className="px-5 py-4 align-top">
-                              <p className="font-semibold text-gray-900 text-xs leading-snug line-clamp-3">{item.question}</p>
+                              <p className="font-semibold text-gray-900 text-xs leading-snug line-clamp-3 break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}}>{item.question}</p>
                               {isInactive && (
                                 <span className="inline-block mt-1 text-[9px] px-1 bg-red-100 text-red-600 font-bold rounded uppercase">
                                   {item.status === 'inactive' ? 'Inactive' : 'Category Inactive'}
@@ -603,7 +603,7 @@ export default function Faqs() {
                               )}
                             </td>
                             <td className="px-5 py-4 align-top">
-                              <p className="text-gray-500 text-xs leading-snug line-clamp-4">{item.answer}</p>
+                              <p className="text-gray-500 text-xs leading-snug line-clamp-4 break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}}>{item.answer}</p>
                             </td>
                             <td className="px-5 py-4 align-top">
                               <div className="space-y-1.5">
@@ -731,7 +731,7 @@ export default function Faqs() {
                               />
                             </td>
                             <td className="px-5 py-4 align-middle">
-                              <span className="font-bold text-gray-900 text-sm">{cat.faq_title}</span>
+                              <span className="font-bold text-gray-900 text-sm break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}}>{cat.faq_title}</span>
                             </td>
                             <td className="px-5 py-4 align-middle text-center">
                               <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${

@@ -17,8 +17,8 @@ export const faqCategoryService = {
     const res = await api.delete(`/faq-categories/${categoryId}`);
     return res.data;
   },
-  bulkDeleteCategories: async (ids) => {
-    const res = await api.post('/faq-categories/bulk-delete', { ids });
+  bulkDeleteCategories: async (category_ids) => {
+    const res = await api.post('/faq-categories/bulk-delete', { category_ids });
     return res.data;
   }
 };

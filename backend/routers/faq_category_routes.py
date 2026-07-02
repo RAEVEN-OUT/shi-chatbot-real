@@ -56,7 +56,7 @@ class FAQCategoryUpdate(BaseModel):
     status: Optional[str] = None
 
 class BulkDeleteRequest(BaseModel):
-    category_ids: List[str]
+    ids: List[str]
 
 from sqlalchemy import func, delete
 
@@ -233,7 +233,7 @@ async def bulk_delete_categories(
     db: AsyncSession = Depends(get_db)
 ):
     stmt = select(FAQCategory).where(
-        FAQCategory.id.in_(data.category_ids),
+        FAQCategory.id.in_(data.ids),
         FAQCategory.organization_id == user["postgres_user"].organization_id
     )
     result = await db.execute(stmt)

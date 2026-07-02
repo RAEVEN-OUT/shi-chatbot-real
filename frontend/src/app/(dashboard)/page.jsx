@@ -151,7 +151,7 @@ export default function Home() {
               <div className="divide-y divide-gray-200">
                 {recentFailed.slice(0, 5).map(fq => (
                   <div key={fq.id} className="p-4 hover:bg-white border-gray-200 transition-colors">
-                    <p className="text-sm font-medium text-gray-900 mb-1">"{fq.customer_question}"</p>
+                    <p className="text-sm font-medium text-gray-900 mb-1 break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}} title={fq.customer_question}>"{fq.customer_question}"</p>
                     <p className="text-xs text-gray-500">{fq.created_at ? formatDate(fq.created_at, customTimeStamp) : 'N/A'}</p>
                   </div>
                 ))}

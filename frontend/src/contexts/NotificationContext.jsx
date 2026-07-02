@@ -53,13 +53,13 @@ export function NotificationProvider({ children }) {
         const data = JSON.parse(event.data);
         if (data.type === 'conversation_update') {
           const sender = data.sender;
-          // Only customer messages increase the unread count for the bell
+          // Only customer messages trigger a toast info notification
           if (sender === 'user' || sender === 'customer') {
             if (!isFirstFetchRef.current) {
               toast.info?.('New message received', 'A customer has sent a new message in live support.');
             }
-            fetchUnreadCount();
           }
+          fetchUnreadCount();
         }
       } catch (err) {
         console.error('Notification WS parse error', err);

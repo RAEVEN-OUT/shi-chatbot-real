@@ -160,7 +160,7 @@ export default function SystemLogs() {
                       <span className="text-sm font-medium text-gray-700">{log.resource_type}</span>
                     </td>
                     <td className="p-4">
-                      <p className="text-sm text-gray-800 line-clamp-1" title={log.admin_message}>
+                      <p className="text-sm text-gray-800 break-all" style={{wordBreak: 'break-word', overflowWrap: 'anywhere'}} title={log.admin_message}>
                         {log.admin_message}
                       </p>
                     </td>
