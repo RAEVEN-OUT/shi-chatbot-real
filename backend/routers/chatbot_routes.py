@@ -557,7 +557,7 @@ async def _try_fts_fast_path(request: ChatRequest, resolved_query: str, current_
             
     return None, fts_chunks
 
-async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash: str, ctx: DomainContext, fts_chunks: List[KnowledgeSource], cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics) -> tuple[Optional[RetrievalResult], Optional[ChatResponse]]:
+async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash: str, ctx: DomainContext, fts_chunks: List[KnowledgeSource], cache_key: str, background_tasks: BackgroundTasks, metrics: PerformanceMetrics, is_compound: bool = False) -> tuple[Optional[RetrievalResult], Optional[ChatResponse]]:
     """Perform embedding generation, Qdrant vector search, chunk expansion, and result deduplication."""
     t0 = time.perf_counter()
     query_vector = await redis_service.get_cached_embedding(q_hash)
@@ -578,7 +578,7 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
             query_vector=query_vector,
             category_ids=ctx.category_ids,
             domain_id=request.domain_id,
-            limit=3,
+            limit=5 if is_compound else 3,
             skip_faq=not ctx.has_faqs,
             skip_docs=not ctx.has_docs
         )
@@ -707,7 +707,7 @@ async def _semantic_retrieval(request: ChatRequest, resolved_query: str, q_hash:
     logger.warning(f"TOP SEMANTIC SCORE = {max_score}")
 
     fast_path_eligible = False
-    if top_sources[0].source_type == "FAQ" and max_score >= SEMANTIC_FAQ_FAST_PATH_SCORE:
+    if not is_compound and top_sources[0].source_type == "FAQ" and max_score >= SEMANTIC_FAQ_FAST_PATH_SCORE:
         fast_path_eligible = True
         for src in top_sources[1:]:
             if src.source_type == "FAQ":
@@ -935,6 +935,27 @@ async def _build_context_and_call_llm(
     else:
         yield ChatResponse(answer=answer, cached=False, sources=len(result.sources))
 
+def is_compound_query(query: str) -> bool:
+    q_lower = query.lower().strip()
+    if q_lower.count("?") >= 2:
+        return True
+        
+    conjunctions = [" and ", " also ", " along with ", " as well as ", " & ", " plus ", ", "]
+    has_conjunction = any(c in q_lower for c in conjunctions)
+    
+    question_starters = ("what", "how", "can", "do", "does", "is", "are", "will", "would", "should", "could", "when", "where", "why", "who", "which")
+    
+    words = q_lower.replace("?", " ").replace(".", " ").replace(",", " ").split()
+    wh_count = sum(1 for w in words if w in question_starters)
+    
+    if wh_count >= 2:
+        return True
+        
+    if has_conjunction and (q_lower.startswith(question_starters) or wh_count == 0):
+        return True
+        
+    return False
+
 # --- Orchestrator ---
 async def ask_chatbot_stream(
     request: 'ChatRequest',
@@ -983,12 +1004,26 @@ async def ask_chatbot_stream(
             yield {"type": "result", "content": _finalize_response(cached_resp, request, metrics, normalized_q, "cache_after_rewrite", background_tasks)}
             return
 
-    fts_resp, fts_chunks = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
-    if fts_resp:
-        yield {"type": "result", "content": _finalize_response(fts_resp, request, metrics, normalized_q, "fts_fast_path", background_tasks)}
-        return
+    is_compound = is_compound_query(resolved_query)
+    fts_chunks = []
+    
+    if is_compound:
+        logger.warning(
+            "Compound query detected\n"
+            "Skipping FAQ fast paths\n"
+            "Retrieving Top 5 semantic results"
+        )
+    else:
+        logger.warning(
+            "Single-intent query detected\n"
+            "Using FAQ fast paths"
+        )
+        fts_resp, fts_chunks = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
+        if fts_resp:
+            yield {"type": "result", "content": _finalize_response(fts_resp, request, metrics, normalized_q, "fts_fast_path", background_tasks)}
+            return
 
-    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, fts_chunks, cache_key, background_tasks, metrics)
+    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, fts_chunks, cache_key, background_tasks, metrics, is_compound=is_compound)
     if semantic_resp:
         scores = {"top_score": retrieval_res.sources[0].score} if retrieval_res and retrieval_res.sources else {}
         yield {"type": "result", "content": _finalize_response(semantic_resp, request, metrics, normalized_q, "semantic_fast_path", background_tasks, scores)}
@@ -1093,17 +1128,21 @@ async def debug_chatbot(
             debug_info["latency_breakdown"] = metrics.to_dict()
             return debug_info
 
-    if ctx.has_faqs:
+    is_compound = is_compound_query(resolved_query)
+    
+    fts_chunks = []
+    if ctx.has_faqs and not is_compound:
         fts_results = await search_faqs_fts(db, request.domain_id, resolved_query, limit=5)
         debug_info["fts_results"] = [c.dict() for c in fts_results]
 
-    fts_resp, fts_chunks = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
-    if fts_resp:
-        debug_info["final_answer"] = fts_resp.answer
-        debug_info["latency_breakdown"] = metrics.to_dict()
-        return debug_info
+    if not is_compound:
+        fts_resp, fts_chunks = await _try_fts_fast_path(request, resolved_query, current_topic, ctx, cache_key, db, background_tasks, metrics)
+        if fts_resp:
+            debug_info["final_answer"] = fts_resp.answer
+            debug_info["latency_breakdown"] = metrics.to_dict()
+            return debug_info
 
-    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, fts_chunks, cache_key, background_tasks, metrics)
+    retrieval_res, semantic_resp = await _semantic_retrieval(request, resolved_query, q_hash, ctx, fts_chunks, cache_key, background_tasks, metrics, is_compound=is_compound)
     if retrieval_res:
         debug_info["semantic_retrieval_results"] = [c.dict() for c in retrieval_res.sources]
         debug_info["selected_context"] = "\n\n".join([c.content for c in retrieval_res.sources])

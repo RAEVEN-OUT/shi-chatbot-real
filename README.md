@@ -373,3 +373,42 @@ Model fallback and failover
 My recommendation
 
 I would finish Phase 3 first by completing the remaining hardening tasks (retry coverage, health endpoint cleanup, logging, etc.). Once that's done, move directly into Phase 4. That's where your chatbot stops being just a functional RAG system and becomes a measurable, self-improving platform.
+
+
+User
+│
+├── Redis
+│      │
+│      └── Hit → Return
+│
+├── Intent
+│      │
+│      └── Return
+│
+├── Compound?
+│
+├── FTS (FAQ only)
+│      │
+│      └── Hit → Return
+│
+├── Embedding
+│
+├── Qdrant
+│
+├── Semantic FAQ Fast Path
+│      │
+│      ├── Top result is FAQ
+│      ├── Score ≥ 0.75
+│      ├── No close competitor
+│      │
+│      └── Return
+│
+├── General Retrieval
+│      │
+│      ├── Top score < 0.35 ?
+│      │
+│      ├── YES → Fallback
+│      │
+│      └── NO → LLM
+│
+└── LLM

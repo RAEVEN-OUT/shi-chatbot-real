@@ -21,7 +21,10 @@ async def test_scenario(name, question):
             print(f"Error parsing response: {response.text}")
 
 async def main():
-    await test_scenario("Active document", "What laws govern the GoRide terms?")
+    await test_scenario("Single FAQ", "What features does bot.com offer?")
+    await test_scenario("Semantic FAQ", "Can you tell me the features of bot.com?")
+    await test_scenario("Compound FAQ", "How can I contact customer support and what payment methods do you accept?")
+    await test_scenario("Compound Document", "What is terms.txt and what laws govern the GoRide terms?")
 
 if __name__ == "__main__":
     asyncio.run(main())
