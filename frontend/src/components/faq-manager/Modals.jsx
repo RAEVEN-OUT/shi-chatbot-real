@@ -461,6 +461,10 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
         rowsToProcess = uniqueRows.slice(0, 250);
       }
 
+      console.log("FINAL PAYLOAD", rowsToProcess);
+      console.log("LENGTH", rowsToProcess.length);
+      console.log("JSON", JSON.stringify(rowsToProcess));
+
       const res = await api.post('/faq-hierarchy/bulk', rowsToProcess);
       setResults(res.data);
       if (res.data.success_count > 0) {
