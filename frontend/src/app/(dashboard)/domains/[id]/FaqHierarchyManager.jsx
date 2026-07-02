@@ -129,6 +129,34 @@ export default function FaqHierarchyManager({ scopedDomainId }) {
     }
   };
 
+  // Auto-poll document status if any are processing
+  useEffect(() => {
+    const isProcessing = documents.some(d => ['processing', 'embedding', 'queued', 'pending'].includes(d.status));
+    if (!isProcessing) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const docRes = await api.get('/documents');
+        const newDocs = docRes.data || [];
+        setDocuments(newDocs);
+        
+        setSelectedNode(prev => {
+          if (prev && prev.type === 'document') {
+            const updatedDoc = newDocs.find(d => d.id === prev.id);
+            if (updatedDoc && updatedDoc.status !== prev.data.status) {
+              return { ...prev, data: updatedDoc };
+            }
+          }
+          return prev;
+        });
+      } catch (e) {
+        console.error("Failed to poll documents status", e);
+      }
+    }, 4000);
+
+    return () => clearInterval(intervalId);
+  }, [documents]);
+
   const handleDomainFilterSubmit = (e) => {
     e.preventDefault();
     setActiveDomainFilter(domainFilterInput.trim().toLowerCase());

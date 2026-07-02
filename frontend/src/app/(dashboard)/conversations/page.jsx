@@ -743,27 +743,27 @@ export default function Conversations() {
                       msgContent = (
                         <div
                           key={msg.id || idx}
-                          className={`flex flex-col max-w-[85%] md:max-w-[70%] ${isCustomer ? 'self-end items-end' : 'self-start items-start'}`}
+                          className={`flex flex-col max-w-[85%] md:max-w-[70%] ${isCustomer ? 'self-start items-start' : 'self-end items-end'}`}
                         >
                           <div
-                            className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                            className={`rounded-2xl px-4 py-2.5 text-sm leading-relaxed break-words whitespace-pre-wrap ${
                               isCustomer
-                                ? 'bg-blue-600 text-white rounded-br-none shadow-md shadow-blue-600/10'
+                                ? 'bg-white border border-gray-200 text-gray-800 rounded-bl-none shadow-sm'
                                 : isAI
-                                ? 'bg-white border-gray-200 border border-gray-200 text-gray-800 rounded-bl-none'
-                                : 'bg-indigo-600/10 border border-indigo-500/20 text-gray-800 rounded-bl-none'
+                                ? 'bg-blue-600 text-white rounded-br-none shadow-md shadow-blue-600/10'
+                                : 'bg-indigo-600 text-white rounded-br-none shadow-md shadow-indigo-600/10'
                             }`}
                           >
                             {msg.message}
                           </div>
                           <div className="flex items-center gap-1.5 mt-1 px-1">
                             {isAI && msg.source && (
-                              <span className="text-[8px] bg-indigo-500/20 text-indigo-300 px-1 py-0.2 rounded font-bold uppercase tracking-wider">
+                              <span className="text-[8px] bg-blue-500/20 text-blue-400 px-1 py-0.2 rounded font-bold uppercase tracking-wider">
                                 AI: {msg.source}
                               </span>
                             )}
                             {!isCustomer && !isAI && (
-                              <span className="text-[8px] bg-blue-500/20 text-gray-700 px-1 py-0.2 rounded font-bold uppercase tracking-wider">
+                              <span className="text-[8px] bg-indigo-500/20 text-indigo-400 px-1 py-0.2 rounded font-bold uppercase tracking-wider">
                                 ADMIN
                               </span>
                             )}

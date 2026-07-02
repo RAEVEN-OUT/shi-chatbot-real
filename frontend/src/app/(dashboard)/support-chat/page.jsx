@@ -118,7 +118,7 @@ export default function SupportChat() {
                       <User size={12} />
                       <span className="text-[10px] uppercase font-bold tracking-wider">{msg.sender_role}</span>
                     </div>
-                    <p className="text-sm">{msg.text}</p>
+                    <p className="text-sm break-words whitespace-pre-wrap">{msg.text}</p>
                     {msg.timestamp && (
                       <p className="text-[9px] opacity-60 mt-2 text-right">
                         {formatTime(msg.timestamp, userData?.custom_time_stamp)}
