@@ -435,6 +435,7 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
       const workbook = XLSX.read(data, { type: 'array' });
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(worksheet);
+      console.log("RAW EXCEL", json);
 
       if (json.length === 0) { showToast('File is empty', 'error'); setLoading(false); return; }
 
@@ -445,10 +446,11 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
         const question = (row.Question || '').toString().trim();
         const answer = (row.Answer || '').toString().trim();
         if (!question || !answer) continue;
-        const key = `${category}|${question}|${answer}`.toLowerCase();
+        const key = `${category}|${question}`.toLowerCase();
         if (!seen.has(key)) {
           seen.add(key);
           uniqueRows.push({ Domain: domain.domain_url, Category: category, Question: question, Answer: answer });
+          console.log("ROWS TO SEND", uniqueRows);
         }
       }
 
