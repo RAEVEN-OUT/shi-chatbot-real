@@ -434,25 +434,89 @@ export function BulkUploadModal({ isOpen, onClose, loadInitialData, domain, uplo
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data, { type: 'array' });
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(worksheet);
-      console.log("RAW EXCEL", json);
+      const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+      if (rawRows.length === 0) { showToast('File is empty', 'error'); setLoading(false); return; }
 
-      if (json.length === 0) { showToast('File is empty', 'error'); setLoading(false); return; }
+      const KNOWN_HEADERS = {
+          "category": ["category", "faq category", "categories"],
+          "question": ["question", "faq question"],
+          "answer": ["answer", "response"],
+          "domain": ["domain", "website", "site"]
+      };
+
+      const getNormalizedHeader = (rawHeader) => {
+          if (!rawHeader || typeof rawHeader !== 'string') return null;
+          const normalized = rawHeader.trim().toLowerCase();
+          for (const [key, aliases] of Object.entries(KNOWN_HEADERS)) {
+              if (aliases.includes(normalized)) return key;
+          }
+          return normalized;
+      };
+
+      const firstRow = rawRows[0] || [];
+      let matchCount = 0;
+      const normalizedHeaders = [];
+      const columnMap = {};
+
+      firstRow.forEach((cell, index) => {
+          const key = getNormalizedHeader(cell);
+          if (key && Object.keys(KNOWN_HEADERS).includes(key)) {
+              matchCount++;
+          }
+          normalizedHeaders[index] = key || `column_${index}`;
+      });
+
+      console.log("Detected headers", firstRow);
+      console.log("Has headers:", matchCount >= 2);
+      console.log("Normalized headers", normalizedHeaders);
+
+      let dataStartIndex = 0;
+      if (matchCount >= 2) {
+          dataStartIndex = 1;
+          normalizedHeaders.forEach((key, i) => columnMap[i] = key);
+      } else {
+          dataStartIndex = 0;
+          if (!domain) {
+              columnMap[0] = "domain";
+              columnMap[1] = "category";
+              columnMap[2] = "question";
+              columnMap[3] = "answer";
+          } else {
+              columnMap[0] = "category";
+              columnMap[1] = "question";
+              columnMap[2] = "answer";
+          }
+      }
+
+      const json = [];
+      for (let i = dataStartIndex; i < rawRows.length; i++) {
+          const rowArray = rawRows[i];
+          if (!rowArray || rowArray.length === 0 || rowArray.every(c => c === null || c === undefined || c === '')) continue;
+          
+          const rowObj = {};
+          Object.keys(columnMap).forEach(colIndex => {
+              rowObj[columnMap[colIndex]] = rowArray[colIndex];
+          });
+          json.push(rowObj);
+      }
+      
+      console.log("Rows parsed", json.length);
 
       const seen = new Set();
       const uniqueRows = [];
       for (const row of json) {
-        const category = (row.Category || 'General').toString().trim();
-        const question = (row.Question || '').toString().trim();
-        const answer = (row.Answer || '').toString().trim();
+        const category = (row.category || 'General').toString().trim();
+        const question = (row.question || '').toString().trim();
+        const answer = (row.answer || '').toString().trim();
         if (!question || !answer) continue;
         const key = `${category}|${question}`.toLowerCase();
         if (!seen.has(key)) {
           seen.add(key);
-          uniqueRows.push({ Domain: domain.domain_url, Category: category, Question: question, Answer: answer });
-          console.log("ROWS TO SEND", uniqueRows);
+          const rowDomain = (row.domain || (domain && domain.domain_url) || '').toString().trim();
+          uniqueRows.push({ Domain: rowDomain, Category: category, Question: question, Answer: answer });
         }
       }
+      console.log("Rows sent", uniqueRows.length);
 
       if (uniqueRows.length < json.length) showToast(`${json.length - uniqueRows.length} duplicate or invalid rows skipped.`, 'warning');
       let rowsToProcess = uniqueRows;
