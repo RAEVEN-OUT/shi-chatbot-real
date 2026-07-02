@@ -133,6 +133,21 @@ class QdrantService:
             )
         await _call_delete()
 
+    async def update_payload_by_question_id(self, question_id: str, payload_update: dict):
+        """Update payload fields for a specific FAQ question_id."""
+        @qdrant_retry
+        async def _call_set():
+            return await self.client.set_payload(
+                collection_name=self.collection_name,
+                payload=payload_update,
+                points=FilterSelector(
+                    filter=Filter(
+                        must=[FieldCondition(key="question_id", match=MatchValue(value=question_id))]
+                    )
+                )
+            )
+        await _call_set()
+
     async def delete_chunks_by_category_id(self, category_id: str):
         """Delete all Qdrant points for a given category_id."""
         @qdrant_retry

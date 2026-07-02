@@ -73,7 +73,7 @@ async def list_faq_categories(
     ).where(
         FAQCategory.organization_id == user["postgres_user"].organization_id,
         FAQCategory.status != "deleted"
-    ).group_by(FAQCategory.id)
+    ).group_by(FAQCategory.id).order_by(FAQCategory.faq_title.asc())
 
     result = await db.execute(stmt)
     categories = result.all()

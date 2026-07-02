@@ -23,6 +23,7 @@ class FAQQuestionCreate(BaseModel):
     aliases: Optional[List[str]] = []
 
 class FAQQuestionUpdate(BaseModel):
+    faq_id: Optional[str] = None
     question: Optional[str] = None
     answer: Optional[str] = None
     aliases: Optional[List[str]] = None
@@ -97,7 +98,7 @@ async def list_faq_questions(
     count_result = await db.execute(count_stmt)
     total_items = count_result.scalar() or 0
 
-    stmt = stmt.order_by(FAQQuestion.display_order.asc(), FAQQuestion.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+    stmt = stmt.order_by(FAQQuestion.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     q_result = await db.execute(stmt)
     questions = q_result.scalars().all()
 
@@ -225,6 +226,24 @@ async def update_faq_question(
         raise HTTPException(status_code=404, detail="Question not found")
 
     needs_reembed = False
+    needs_payload_update = False
+    payload_updates = {}
+
+    if data.faq_id is not None and data.faq_id != q.faq_id:
+        # Verify the new category belongs to the user's org
+        cat_stmt = select(FAQCategory).where(
+            FAQCategory.id == data.faq_id,
+            FAQCategory.organization_id == user["postgres_user"].organization_id
+        )
+        cat_result = await db.execute(cat_stmt)
+        cat = cat_result.scalar_one_or_none()
+        if not cat:
+            raise HTTPException(status_code=404, detail="Target category not found or access denied")
+            
+        q.faq_id = data.faq_id
+        payload_updates["category_id"] = data.faq_id
+        needs_payload_update = True
+
     if data.question is not None and data.question != q.question:
         q.question = data.question
         needs_reembed = True
@@ -236,18 +255,8 @@ async def update_faq_question(
         needs_reembed = True
     if data.status is not None and data.status != q.status:
         q.status = data.status
-        # If status changes (e.g. inactive vs active), we might want to purge or add it, 
-        # but right now qdrant chunks don't filter by status dynamically unless we delete it.
-        # Actually, if it becomes inactive we should probably delete it from qdrant,
-        # but to keep it simple and consistent with the existing flow, we'll re-embed it.
-        if q.status == "inactive":
-            try:
-                await qdrant_service.delete_chunks_by_question_id(q.id)
-            except Exception as e:
-                print(f"[WARN] Failed to delete from Qdrant on inactive: {e}")
-            needs_reembed = False # already deleted, don't re-add
-        elif q.status == "active":
-            needs_reembed = True
+        payload_updates["is_active"] = (q.status == "active")
+        needs_payload_update = True
 
     await db.commit()
 
@@ -270,11 +279,17 @@ async def update_faq_question(
                     "question": q.question,
                     "answer": q.answer,
                     "aliases": q.aliases or [],
-                    "is_active": True
+                    "is_active": (q.status == "active")
                 }
             )
         except Exception as e:
             print(f"[WARN] Re-embed failed for question {q.id}: {e}")
+    elif needs_payload_update:
+        try:
+            # Update metadata payload directly without touching the vector/embedding
+            await qdrant_service.update_payload_by_question_id(q.id, payload_updates)
+        except Exception as e:
+            print(f"[WARN] Payload update failed for question {q.id}: {e}")
 
     log_action(
         user_uid=user["uid"],
