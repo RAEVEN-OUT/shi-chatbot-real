@@ -238,6 +238,8 @@ class QdrantService:
         so uploaded documents are always reachable regardless of category config.
         Results from both pools are merged and re-ranked by score.
         """
+        logger.warning(f"category_ids = {category_ids}")
+        logger.warning(f"domain_id = {domain_id}")
         # ── FAQ chunk search ─────────────────────────────────────────────────
         async def _search_faq():
             if skip_faq:
