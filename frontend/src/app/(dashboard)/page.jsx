@@ -41,12 +41,9 @@ export default function Home() {
         // Calculate stats
         const active = domainsList.filter(d => d.is_active).length;
         const total = conversationsList.length;
-        const aiResolved = conversationsList.filter(c => c.resolution_type === 'AI').length;
-        const humanResolved = conversationsList.filter(c => c.resolution_type === 'HUMAN').length;
-        
-        const totalInteractions = total + failedList.length;
+        const totalInteractions = analyticsData ? (analyticsData.totalQueries + analyticsData.failedQsCount) : 0;
         const success = totalInteractions > 0 
-          ? Math.round(((aiResolved + humanResolved) / totalInteractions) * 100) 
+          ? Math.round(((analyticsData.faqResolved + analyticsData.aiResolved) / totalInteractions) * 100) 
           : 0;
 
         // Filter messages today
@@ -196,6 +193,15 @@ export default function Home() {
                   </div>
                   <div className="w-full bg-gray-100 rounded-full h-2">
                     <div className="bg-red-500 h-2 rounded-full" style={{ width: `${analytics.totalQueries > 0 ? (analytics.spamCount/analytics.totalQueries)*100 : 0}%` }}></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-sm mb-1.5">
+                    <span className="text-gray-500">Human Resolved (Admin Messages)</span>
+                    <span className="text-gray-900 font-bold">{analytics.humanResolved || 0}</span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2">
+                    <div className="bg-orange-500 h-2 rounded-full" style={{ width: `${analytics.totalQueries > 0 ? ((analytics.humanResolved || 0)/analytics.totalQueries)*100 : 0}%` }}></div>
                   </div>
                 </div>
                 <div className="pt-4 text-center">
